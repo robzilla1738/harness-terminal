@@ -447,7 +447,11 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
         guard let owner = sender.representedObject as? String else { return }
         let state = SessionCoordinator.shared.connectionDescription(for: owner)
         guard let endpoint = SessionCoordinator.shared.endpoint(forOwner: owner) else {
-            DisplayMessage.show("This host is disconnected. Choose Connect or edit its SSH settings.")
+            let alert = NSAlert()
+            alert.messageText = "Connection Details"
+            alert.informativeText = "Host: " + owner + "\n" + state + "\n\nChoose Connect, Retry Connection, or edit its SSH settings."
+            alert.addButton(withTitle: "Done")
+            alert.runModal()
             return
         }
         DispatchQueue.global(qos: .userInitiated).async {

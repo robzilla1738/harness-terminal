@@ -37,7 +37,7 @@ final class BellScanTests: XCTestCase {
         let esc: UInt8 = 0x1B, bel: UInt8 = 0x07
         var s = SurfaceRegistry.BellScanState.normal
         XCTAssertFalse(scan([esc, 0x5D] + Array("133;D;0".utf8), state: &s))
-        XCTAssertEqual(s, .string, "still inside the OSC string across the chunk boundary")
+        XCTAssertEqual(s, .oscString, "still inside the OSC string across the chunk boundary")
         XCTAssertFalse(scan([bel], state: &s), "the terminator BEL in the next chunk is not a bell")
         XCTAssertEqual(s, .normal)
     }
@@ -67,7 +67,7 @@ final class BellScanTests: XCTestCase {
         let esc: UInt8 = 0x1B, can: UInt8 = 0x18, bel: UInt8 = 0x07
         var s = SurfaceRegistry.BellScanState.normal
         XCTAssertFalse(scan([esc, 0x5D] + Array("oops".utf8), state: &s)) // unterminated OSC
-        XCTAssertEqual(s, .string)
+        XCTAssertEqual(s, .oscString)
         XCTAssertTrue(scan([can, bel], state: &s), "CAN aborts the string so the next BEL is a real bell")
         XCTAssertEqual(s, .normal)
     }
@@ -75,7 +75,7 @@ final class BellScanTests: XCTestCase {
     func testBELInsideDCSStringIsNotABell() {
         // ESC P (DCS) ... a 0x07 byte in the payload ... ESC \  — the BEL here is data, not a bell.
         let esc: UInt8 = 0x1B, bs: UInt8 = 0x5C, bel: UInt8 = 0x07
-        let seq = [esc, 0x50] + Array("q".utf8) + [bel] + [esc, bs]
+        let seq = [esc, 0x50] + Array("q".utf8) + [bel, bel] + [esc, bs]
         var s = SurfaceRegistry.BellScanState.normal
         XCTAssertFalse(scan(seq, state: &s), "a BEL inside a DCS string is not a bell")
         XCTAssertEqual(s, .normal)

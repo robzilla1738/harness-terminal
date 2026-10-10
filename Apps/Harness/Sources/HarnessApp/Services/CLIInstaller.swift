@@ -40,15 +40,22 @@ enum CLIInstaller {
                 var launchAgentMessage = ""
                 if let daemon = daemonSrc {
                     do {
+                        let owner = HarnessToolLocator.companion("HarnessSessionHost", to: daemon)
+                        guard FileManager.default.isExecutableFile(atPath: owner.path) else { throw CocoaError(.fileNoSuchFile) }
+                        try BinaryRefresher.copyExecutable(from: owner, to: BinaryRefresher.installedSessionHostPath)
                         try BinaryRefresher.copyExecutable(from: daemon, to: daemonDest)
-                        _ = try LaunchAgentInstaller.install(daemonPath: daemonDest)
-                        launchAgentMessage = "\nHarnessDaemon installed to \(daemonDest.path)\nLaunchAgent installed at \(HarnessPaths.launchAgentURL.path)"
+                        if !HarnessPaths.hasHomeOverride {
+                            _ = try LaunchAgentInstaller.install(daemonPath: daemonDest)
+                            launchAgentMessage = "\nHarnessDaemon installed to \(daemonDest.path)\nLaunchAgent installed at \(HarnessPaths.launchAgentURL.path)"
+                        } else {
+                            launchAgentMessage = "\nHelpers installed in the explicit Harness home. Login service and shell profiles were not changed."
+                        }
                     } catch {
                         launchAgentMessage = "\nLaunchAgent install failed: \(error)"
                     }
                 }
                 var completionMessage = ""
-                if let lines = try? ShellCompletionInstaller.installForLoginShell(), !lines.isEmpty {
+                if !HarnessPaths.hasHomeOverride, let lines = try? ShellCompletionInstaller.installForLoginShell(), !lines.isEmpty {
                     completionMessage = "\n" + lines.joined(separator: "\n")
                 }
                 alertMessage = """

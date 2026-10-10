@@ -16,6 +16,7 @@ enum HarnessDesign {
         return NSApp.applicationIconImage
     }
 
+    static let formControlHeight: CGFloat = 30
     static let sidebarWidth: CGFloat = 264
     /// Provisional size before the window has a display scale and measured title bar.
     static let defaultWindowSize = NSSize(width: 960, height: 640)
@@ -34,15 +35,12 @@ enum HarnessDesign {
         return NSSize(width: width, height: height)
     }
 
-    /// Distance from the window top to the traffic lights' center, measured from the real
-    /// window when it's built (`MainWindowController`). The tab row and the sidebar's top
-    /// controls center on this line so they sit level with the lights.
-    static var titleRowCenter: CGFloat = 26
-    /// The pane border meets this row's bottom. Keep the tabs centered between that
-    /// border and the window top, independently of the configurable pane gutters.
-    static var tabBarHeight: CGFloat {
-        titleRowCenter * 2
-    }
+    /// Keep the tab pill's top and bottom gaps equal to the default pane border gap.
+    /// Window buttons and sidebar controls share this fixed center rather than letting
+    /// AppKit's toolbar metrics change the app's spacing on different macOS versions.
+    static let tabVerticalGap = CGFloat(HarnessSettings.defaultPaneSpacing)
+    static var tabBarHeight: CGFloat { tabPillHeight + 2 * tabVerticalGap }
+    static var titleRowCenter: CGFloat { tabBarHeight / 2 }
     /// One size for every icon on the tab row, including the sidebar bell.
     static let chromeIconPointSize: CGFloat = 14
     static let chromeIconButtonSize: CGFloat = 28
@@ -595,6 +593,7 @@ final class HarnessPillButton: NSButton {
         layer?.cornerCurve = .continuous
 
         titleLabel.stringValue = title
+        setAccessibilityLabel(title)
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         titleLabel.alignment = .center
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -619,8 +618,17 @@ final class HarnessPillButton: NSButton {
 
     func setTitleText(_ text: String) {
         titleLabel.stringValue = text
+        invalidateIntrinsicContentSize()
+        setAccessibilityLabel(text)
         applyChrome()
     }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: titleLabel.intrinsicContentSize.width + 32, height: HarnessDesign.formControlHeight)
+    }
+
+    override var isEnabled: Bool { didSet { applyChrome() } }
+    override func layout() { super.layout(); applyChrome() }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -647,8 +655,9 @@ final class HarnessPillButton: NSButton {
         super.mouseDown(with: event)
     }
 
-    private func applyChrome() {
+    func applyChrome() {
         let c = HarnessDesign.chrome
+        alphaValue = isEnabled ? 1 : 0.45
         switch kind {
         case .primary:
             // Filled near-foreground; label paints in the canvas color so it reads on
@@ -1053,8 +1062,8 @@ final class AgentChipView: NSView {
         layer?.cornerRadius = 0
     }
 
-    func configure(kind: AgentKind, hex: String) {
-        let tint = NSColor.fromHex(hex) ?? HarnessDesign.chrome.accent
+    func configure(kind: AgentKind, hex _: String) {
+        let tint = HarnessDesign.chrome.textPrimary
         iconView.image = AgentIconRenderer.templateOrMonogramImage(for: kind, size: iconSize)
         iconView.contentTintColor = tint
         layer?.backgroundColor = NSColor.clear.cgColor

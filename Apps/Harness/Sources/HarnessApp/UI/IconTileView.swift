@@ -1,7 +1,7 @@
 import AppKit
 import HarnessCore
 
-/// Flat, rectangular app badges with crisp marks and no shadow or animation.
+/// Uniform monochrome agent marks on transparent faces; terminal tiles retain chrome.
 @MainActor
 final class IconTileView: NSView {
     enum Content: Equatable {
@@ -52,12 +52,7 @@ final class IconTileView: NSView {
         let faceRect = bounds
         face.frame = faceRect
         face.cornerRadius = (faceRect.height * 0.25).rounded()
-        let markScale: CGFloat
-        switch content {
-        case .agent(.crush): markScale = 1
-        case .agent(.amp), .agent(.vibe), .agent(.openhands): markScale = 0.9
-        default: markScale = 0.76
-        }
+        let markScale: CGFloat = 0.76
         let markSide = (faceRect.height * markScale).rounded()
         glyph.frame = NSRect(x: faceRect.midX - markSide / 2, y: faceRect.midY - markSide / 2, width: markSide, height: markSide)
         // Draw the prompt as one balanced mark, independent of font metrics.
@@ -86,51 +81,20 @@ final class IconTileView: NSView {
             prompt.isHidden = false
             glyph.isHidden = true
         case let .agent(kind):
-            base = Self.faceColor(for: kind)
+            base = .clear
             prompt.isHidden = true
             glyph.isHidden = false
             glyph.image = AgentIconRenderer.templateOrMonogramImage(for: kind, size: badgeSize.height)
-            glyph.contentTintColor = glyph.image?.isTemplate == true ? NSColor(white: 0.98, alpha: 1) : nil
+            glyph.contentTintColor = .labelColor
         }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         face.backgroundColor = base.cgColor
-        face.borderColor = NSColor.white.withAlphaComponent(0.14).cgColor
+        face.borderColor = (content == .terminal ? NSColor.white.withAlphaComponent(0.14) : NSColor.clear).cgColor
         CATransaction.commit()
     }
 
     func applyChrome() { apply(content) }
-
-    private static func faceColor(for kind: AgentKind) -> NSColor {
-        let hex: String
-        switch kind {
-        case .codex: hex = "#35695B"
-        case .claudeCode: hex = "#C96F51"
-        case .cursor: hex = "#454B57"
-        case .grok: hex = "#3D5367"
-        case .pi: hex = "#7963A6"
-        case .hermes: hex = "#A87541"
-        case .openClaw: hex = "#BC5E50"
-        case .openCode: hex = "#437E87"
-        case .aider: hex = "#4B8065"
-        case .gemini: hex = "#5B77BB"
-        case .goose: hex = "#A98137"
-        case .copilot: hex = "#7C74D4"
-        case .cline: hex = "#697585"
-        case .kilo: hex = "#8A7B36"
-        case .qwen: hex = "#7563BE"
-        case .amp: hex = "#53725B"
-        case .droid: hex = "#AC6541"
-        case .crush: hex = "#9B438F"
-        case .kiro: hex = "#7545B1"
-        case .vibe: hex = "#AB6034"
-        case .openhands: hex = "#996237"
-        case .auggie: hex = "#556FA1"
-        case .kimi: hex = "#4D67B3"
-        case .generic: hex = "#636B78"
-        }
-        return NSColor.fromHex(hex)!
-    }
 
     static func content(for agent: AgentKind?) -> Content {
         agent.map(Content.agent) ?? .terminal

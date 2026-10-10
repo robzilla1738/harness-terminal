@@ -5,6 +5,7 @@ public enum PtyScanEvent: Equatable, Sendable {
     case bell
     case osc(code: Int, body: String, sequenceLength: Int)
     case cursorKeys(application: Bool)
+    case bracketedPaste(Bool)
     case keypad(application: Bool)
     case kittyPush(UInt8)
     case kittyPop(Int)
@@ -12,14 +13,30 @@ public enum PtyScanEvent: Equatable, Sendable {
     /// RIS (`ESC c`). Resets program status and the keyboard-mode mirror.
     case ris
 }
+public struct AnchoredPtyScanEvent: Equatable, Sendable {
+    public var event: PtyScanEvent
+    /// The first byte after the event, in the stable terminal stream epoch.
+    public var endSequence: UInt64
+}
 
 /// Keyboard-mode mirror tracked from the same bytes `PtyStreamScanner` sees.
-public struct KeyboardModeMirror: Equatable, Sendable {
+public struct KeyboardModeMirror: Equatable, Sendable, Codable {
     public var cursorKeysApplication = false
     public var keypadApplication = false
+    public var bracketedPaste = false
     public var kittyStack: [UInt8] = []
 
     public init() {}
+
+    private enum CodingKeys: String, CodingKey { case cursorKeysApplication, keypadApplication, kittyStack, bracketedPaste }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        cursorKeysApplication = try values.decode(Bool.self, forKey: .cursorKeysApplication)
+        keypadApplication = try values.decode(Bool.self, forKey: .keypadApplication)
+        kittyStack = try values.decode([UInt8].self, forKey: .kittyStack)
+        bracketedPaste = try values.decodeIfPresent(Bool.self, forKey: .bracketedPaste) ?? false
+        guard kittyStack.count <= 32 else { throw DecodingError.dataCorruptedError(forKey: .kittyStack, in: values, debugDescription: "Keyboard stack exceeds its bounded depth.") }
+    }
 
     public var kittyFlags: UInt8 { kittyStack.last ?? 0 }
 
@@ -27,12 +44,14 @@ public struct KeyboardModeMirror: Equatable, Sendable {
         var modes = TerminalModes()
         modes.cursorKeysApplication = cursorKeysApplication
         modes.keypadApplication = keypadApplication
+        modes.bracketedPaste = bracketedPaste
         modes.kittyKeyboardStack = kittyStack
         return modes
     }
 
     public mutating func apply(_ event: PtyScanEvent) {
         switch event {
+        case let .bracketedPaste(enabled): bracketedPaste = enabled
         case let .cursorKeys(application):
             cursorKeysApplication = application
         case let .keypad(application):
@@ -62,8 +81,8 @@ public struct KeyboardModeMirror: Equatable, Sendable {
 
 /// Linear scan of PTY output. State threads across chunks. OSC bodies are capped at the
 /// program-status sequence limit so a hostile stream cannot grow the buffer.
-public struct PtyStreamScanner: Equatable, Sendable {
-    public enum Phase: Equatable, Sendable {
+public struct PtyStreamScanner: Equatable, Sendable, Codable {
+    public enum Phase: Equatable, Sendable, Codable {
         case ground
         case esc
         case csi
@@ -95,6 +114,21 @@ public struct PtyStreamScanner: Equatable, Sendable {
             }
         }
         return events
+    }
+    public mutating func scanAnchored(_ data: Data, sequence: UInt64) -> [AnchoredPtyScanEvent] {
+        var events: [AnchoredPtyScanEvent] = []
+        visit(data, sequence: sequence) { events.append($0) }
+        return events
+    }
+    public mutating func visit(_ data: Data, sequence: UInt64 = 0, receive: (AnchoredPtyScanEvent) -> Void) {
+        data.withUnsafeBytes { raw in
+            for (offset, byte) in raw.bindMemory(to: UInt8.self).enumerated() {
+                if phase == .ground, byte != 0x1B, byte != 0x07 { continue }
+                for event in feed(byte) {
+                    receive(AnchoredPtyScanEvent(event: event, endSequence: sequence + UInt64(offset) + 1))
+                }
+            }
+        }
     }
 
     private mutating func feed(_ byte: UInt8) -> [PtyScanEvent] {
@@ -157,17 +191,19 @@ public struct PtyStreamScanner: Equatable, Sendable {
             if length > ProgramStatusRevision.maxSequenceBytes { overflow = true }
             if !overflow, buffer.count < Self.maxBuffer { buffer.append(byte) }
         case .oscEsc:
-            if byte == 0x5C { return finishOSC(terminator: 2) }
-            if byte == 0x1B { return [] }
+            if byte == 0x5C || byte == 0x07 { return finishOSC(terminator: 2) }
+            if byte == 0x18 || byte == 0x1A { phase = .ground; buffer.removeAll(keepingCapacity: true); return [] }
+            if byte == 0x1B { length += 1; if length > ProgramStatusRevision.maxSequenceBytes { overflow = true }; return [] }
             phase = .osc
-            length += 1
+            length += 2
+            if !overflow, buffer.count + 2 <= Self.maxBuffer { buffer.append(0x1B) }
             if length > ProgramStatusRevision.maxSequenceBytes { overflow = true }
             if !overflow, buffer.count < Self.maxBuffer { buffer.append(byte) }
         case .string:
             if byte == 0x1B { phase = .stringEsc }
             else if byte == 0x18 || byte == 0x1A { phase = .ground }
         case .stringEsc:
-            if byte == 0x5C || byte == 0x07 { phase = .ground }
+            if byte == 0x5C || byte == 0x18 || byte == 0x1A { phase = .ground }
             else if byte != 0x1B { phase = .string }
         }
         return []
@@ -215,8 +251,10 @@ public struct PtyStreamScanner: Equatable, Sendable {
         }
         switch (marker, final) {
         case (0x3F, 0x68), (0x3F, 0x6C): // DECCKM among private modes
-            guard params.contains(1) else { return [] }
-            return [.cursorKeys(application: final == 0x68)]
+            var events: [PtyScanEvent] = []
+            if params.contains(1) { events.append(.cursorKeys(application: final == 0x68)) }
+            if params.contains(2004) { events.append(.bracketedPaste(final == 0x68)) }
+            return events
         case (0x3E, 0x75):
             return [.kittyPush(UInt8(truncatingIfNeeded: params.first ?? 0))]
         case (0x3C, 0x75):

@@ -15,6 +15,7 @@ final class DaemonLink {
     /// Called on the main actor after the snapshot changes.
     var onChange: ((DaemonLink) -> Void)?
     /// A client directive from this daemon (a CLI `copy-mode` aimed at one of its panes).
+    var onCapabilities: ((Set<String>) -> Void)?
     var onDirective: ((ClientDirective) -> Void)?
 
     private var service: DaemonSessionService
@@ -38,6 +39,7 @@ final class DaemonLink {
             self.endpoint = endpoint
             service = DaemonSessionService(endpoint: endpoint)
         }
+        onCapabilities?([])
         generation += 1
         let generation = generation
         subscription?.cancel()
@@ -46,6 +48,7 @@ final class DaemonLink {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let attached = try? service.subscribeSnapshot(
                 label: "harness-app",
+                capabilities: [DaemonStats.clientCapabilities, DaemonStats.notificationPolicy, DaemonStats.paneContent, DaemonStats.activityState, DaemonStats.agentIdentities],
                 onRevision: { [weak self] revision in
                     DispatchQueue.main.async {
                         MainActor.assumeIsolated {
@@ -58,7 +61,8 @@ final class DaemonLink {
                     DispatchQueue.main.async {
                         MainActor.assumeIsolated {
                             guard let self, generation == self.generation else { return }
-                            self.onDirective?(directive)
+                            if case let .capabilities(values) = directive { self.onCapabilities?(Set(values)) }
+                            else { self.onDirective?(directive) }
                         }
                     }
                 },
@@ -80,6 +84,10 @@ final class DaemonLink {
                 else { self.retryDelay = 1; self.refresh() }
             }
         }
+    }
+
+    func refreshConnection() {
+        if subscription == nil { start() } else { refresh() }
     }
 
     func stop() {
@@ -123,7 +131,7 @@ final class DaemonLink {
 
     /// A dropped push channel retries with backoff; a dead tunnel is the coordinator's to revive.
     private func scheduleRetry() {
-        let delay = retryDelay
+        let delay = retryDelay * Double.random(in: 0.8...1.2)
         retryDelay = min(delay * 2, 8)
         let generation = generation
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in

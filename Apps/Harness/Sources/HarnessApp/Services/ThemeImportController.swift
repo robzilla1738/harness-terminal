@@ -41,15 +41,33 @@ enum ThemeImportController {
             return
         }
 
-        switch presentInstallChoice(for: document) {
-        case .cancel:
-            return
-        case .install:
-            install(document)
-        case .installAndApply:
-            install(document)
-            SessionCoordinator.shared.applyImportedTheme(document)
-        }
+        finish(document, source: url)
+    }
+
+    static func presentITermImport() {
+        let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
+        panel.message = "Choose an iTerm2 .itermcolors preset to preview. No settings change until you choose Install and Apply."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let alert = NSAlert(); alert.messageText = "Select color variant"; alert.informativeText = "Dark/light values fall back to base colors when a variant is absent."
+        let variants = HarnessSelect(); variants.frame = NSRect(x: 0, y: 0, width: 280, height: HarnessDesign.formControlHeight); variants.setAccessibilityLabel("Color variant"); variants.addItems(withTitles: ["Base", "Dark", "Light"])
+        alert.accessoryView = variants; alert.addButton(withTitle: "Preview"); alert.addButton(withTitle: "Cancel")
+        guard HarnessToolPage.runModal(alert) == .alertFirstButtonReturn else { return }
+        do {
+            guard let data = try PrivateFile.read(url) else { throw ThemeDocumentError.malformed("Color file is unavailable") }
+            let variant: ITermColorImport.Variant = [.base, .dark, .light][variants.indexOfSelectedItem]
+            let proposal = try ITermColorImport.parse(data, name: url.deletingPathExtension().lastPathComponent, variant: variant)
+            finish(proposal.document, source: url, warnings: proposal.warnings)
+        } catch { presentFailure(url: url, error: error) }
+    }
+
+    private static func finish(_ document: ThemeDocument, source: URL, warnings: [String] = []) {
+        let choice = presentInstallChoice(for: document, warnings: warnings)
+        guard choice != .cancel else { return }
+        do {
+            _ = try fileService.install(document, into: HarnessPaths.themesDirectory)
+            ThemeLibrary.reload()
+            if choice == .installAndApply { try SessionCoordinator.shared.applyImportedTheme(document) }
+        } catch { presentFailure(url: source, error: error) }
     }
 
     private enum InstallChoice {
@@ -58,14 +76,7 @@ enum ThemeImportController {
         case cancel
     }
 
-    /// Persist the document into the user's themes folder so it survives relaunch and can be
-    /// re-exported/shared. A write failure is non-fatal — the theme can still be applied in-memory.
-    private static func install(_ document: ThemeDocument) {
-        _ = try? fileService.install(document, into: HarnessPaths.themesDirectory)
-        ThemeLibrary.reload()
-    }
-
-    private static func presentInstallChoice(for document: ThemeDocument) -> InstallChoice {
+    private static func presentInstallChoice(for document: ThemeDocument, warnings: [String]) -> InstallChoice {
         let alert = NSAlert()
         alert.alertStyle = .informational
         alert.messageText = "Install theme “\(document.name)”?"
@@ -73,12 +84,27 @@ enum ThemeImportController {
         if let author = document.author, !author.isEmpty {
             info += " By \(author)."
         }
+        info += "\nExisting theme and settings files receive private backups.\n" + warnings.joined(separator: "\n")
         alert.informativeText = info
+        let rows = NSStackView(); rows.orientation = .vertical; rows.alignment = .leading; rows.spacing = 6
+        let sample = NSTextField(labelWithString: "Aa 0123456789 · foreground on background")
+        func color(_ value: HarnessTheme.RGBColor) -> NSColor { NSColor(srgbRed: CGFloat(value.red) / 255, green: CGFloat(value.green) / 255, blue: CGFloat(value.blue) / 255, alpha: 1) }
+        sample.drawsBackground = true; sample.backgroundColor = color(document.colors.background); sample.textColor = color(document.colors.foreground); sample.font = .monospacedSystemFont(ofSize: 16, weight: .regular)
+        sample.setAccessibilityLabel("Foreground " + document.colors.foreground.hexString + " on background " + document.colors.background.hexString)
+        rows.addArrangedSubview(sample)
+        for start in [0, 8] {
+            let row = NSStackView(); row.spacing = 4
+            for index in start..<(start + 8) {
+                let value = document.colors.palette[index], label = NSTextField(labelWithString: String(index)); label.drawsBackground = true; label.backgroundColor = color(value); label.textColor = (0.2126 * Double(value.red) + 0.7152 * Double(value.green) + 0.0722 * Double(value.blue)) > 145 ? .black : .white; label.widthAnchor.constraint(equalToConstant: 38).isActive = true
+                label.setAccessibilityLabel("ANSI \(index): " + value.hexString); row.addArrangedSubview(label)
+            }; rows.addArrangedSubview(row)
+        }
+        alert.accessoryView = rows
         // First button is the default (return-key) action; order them install / apply / cancel.
         alert.addButton(withTitle: "Install")
         alert.addButton(withTitle: "Install and Apply")
         alert.addButton(withTitle: "Cancel")
-        switch alert.runModal() {
+        switch HarnessToolPage.runModal(alert) {
         case .alertFirstButtonReturn: return .install
         case .alertSecondButtonReturn: return .installAndApply
         default: return .cancel
@@ -91,7 +117,7 @@ enum ThemeImportController {
         alert.messageText = "Couldn’t open theme “\(url.lastPathComponent)”"
         alert.informativeText = describe(error)
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+        HarnessToolPage.runModal(alert)
     }
 
     /// Human-readable text for the theme parse/validation errors so the alert is actionable.

@@ -5,11 +5,11 @@ import HarnessCore
 final class SetupEditorController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
     private var setup: SavedSetup
     private var panes: [(tab: Int, pane: SetupPane)]
-    private let nameField = NSTextField()
+    private let nameField = HarnessTextField()
     private let table = NSTableView()
     private let errorLabel = NSTextField(wrappingLabelWithString: "")
-    private let saveButton = NSButton()
-    private let cancelButton = NSButton()
+    private let saveButton = HarnessPillButton(title: "Save Setup", kind: .primary)
+    private let cancelButton = HarnessPillButton(title: "Cancel", kind: .secondary)
     private var isSaving = false
     private let onSave: (SavedSetup, @escaping (String?) -> Void) -> Void
 
@@ -17,21 +17,21 @@ final class SetupEditorController: NSWindowController, NSTableViewDataSource, NS
         self.setup = setup
         panes = setup.tabs.enumerated().flatMap { index, tab in tab.layout.panes.map { (index, $0) } }
         self.onSave = onSave
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 840, height: 460), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 840, height: 640), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "Edit Saved Setup"
         window.isReleasedWhenClosed = false
         window.contentMinSize = NSSize(width: 800, height: 460)
         super.init(window: window)
         let root = NSStackView()
         root.orientation = .vertical
-        root.alignment = .width
+        root.alignment = .leading
         root.spacing = 12
         root.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
         root.translatesAutoresizingMaskIntoConstraints = false
         nameField.stringValue = setup.name
         nameField.placeholderString = "Setup name"
         nameField.setAccessibilityLabel("Setup name")
-        root.addArrangedSubview(nameField)
+        root.addArrangedSubview(HarnessToolPage.field("Setup name", control: nameField))
         let explanation = NSTextField(wrappingLabelWithString: "Each row is a pane. Startup commands are optional and run only when creating a new session. Opening a running setup returns to it. Use Update from Current to save a different split layout.")
         explanation.textColor = .secondaryLabelColor
         root.addArrangedSubview(explanation)
@@ -43,6 +43,7 @@ final class SetupEditorController: NSWindowController, NSTableViewDataSource, NS
             column.isEditable = true
             table.addTableColumn(column)
         }
+        table.setAccessibilityLabel("Saved setup panes and startup commands")
         table.dataSource = self
         table.delegate = self
         table.rowHeight = 30
@@ -56,10 +57,8 @@ final class SetupEditorController: NSWindowController, NSTableViewDataSource, NS
         scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 230).isActive = true
         errorLabel.textColor = .systemRed
         root.addArrangedSubview(errorLabel)
-        cancelButton.title = "Cancel"
         cancelButton.target = self
         cancelButton.action = #selector(cancel)
-        saveButton.title = "Save Setup"
         saveButton.target = self
         saveButton.action = #selector(save)
         saveButton.keyEquivalent = "\r"
@@ -69,6 +68,9 @@ final class SetupEditorController: NSWindowController, NSTableViewDataSource, NS
         if let content = window.contentView {
             NSLayoutConstraint.activate([root.leadingAnchor.constraint(equalTo: content.leadingAnchor), root.trailingAnchor.constraint(equalTo: content.trailingAnchor), root.topAnchor.constraint(equalTo: content.topAnchor), root.bottomAnchor.constraint(equalTo: content.bottomAnchor)])
         }
+        HarnessToolPage.group(root, title: "Panes and startup", views: [scroll])
+        for view in root.arrangedSubviews { view.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -40).isActive = true }
+        HarnessToolPage.install(in: window, title: "Edit saved setup", subtitle: "Define the layout and startup behavior of your next session.", symbol: "rectangle.split.2x2", content: root)
     }
 
     @available(*, unavailable)
@@ -125,8 +127,7 @@ final class SetupEditorController: NSWindowController, NSTableViewDataSource, NS
             guard let self else { return }
             isSaving = false
             saveButton.isEnabled = true
-            saveButton.title = "Save Setup"
-            cancelButton.isEnabled = true
+                cancelButton.isEnabled = true
             if let error { errorLabel.stringValue = error } else { cancel() }
         }
     }

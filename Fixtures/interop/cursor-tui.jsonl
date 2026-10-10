@@ -1,0 +1,7 @@
+{"type": "metadata", "version": 1, "createdAt": "2026-01-01T00:00:00Z", "surfaceID": "00000000-0000-0000-0000-000000000003"}
+{"type": "resize", "timeMs": 0, "rows": 24, "cols": 80}
+{"type": "output", "timeMs": 0, "dataBase64": "G1s/MTA0OWgbWzJKG1tIG1s/MjVsG1sxOzM2bWN1cnNvciDigJQgc3ludGhldGljIEhhcm5lc3MgaW50ZXJvcGVyYWJpbGl0eSBmaXh0dXJlG1swbQ0K"}
+{"type": "output", "timeMs": 100, "dataBase64": "G1syOzFIUmV2aWV3aW5nIGZpeHR1cmUgd29ya3NwYWNlDQobXTc1MDE7c3RhdGU9d29ya2luZzphcHA9Y3Vyc29yOnByb2dyZXNzPTMwG1w="}
+{"type": "output", "timeMs": 200, "dataBase64": "G1szOzFIG1szM21OZWVkcyBhcHByb3ZhbDogaGFybWxlc3MgcHJpbnRmIGZpeHR1cmUbWzBtG103NTAxO3N0YXRlPWJsb2NrZWQ6a2luZD1wZXJtaXNzaW9uOmFwcD1jdXJzb3I6bXNnPVVtVjJhV1YzSUdoaGNtMXNaWE56SUdacGVIUjFjbVVnWTI5dGJXRnVaQT09G1w="}
+{"type": "output", "timeMs": 300, "dataBase64": "G1szOzFIG1sySxtbMzJtRml4dHVyZSBjb21wbGV0ZSDinJMbWzBtG103NTAxO3N0YXRlPWRvbmU6YXBwPWN1cnNvcjptc2c9Um1sNGRIVnlaU0JqYjIxd2JHVjBaUT09G1w="}
+{"type": "output", "timeMs": 400, "dataBase64": "G1s/MjVoG1s/MTA0OWwNClJldHVybmVkIHRvIHNoZWxsDQo="}

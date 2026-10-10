@@ -3,6 +3,45 @@ import HarnessCore
 import HarnessScript
 
 extension HarnessCLI {
+    static func handlePlugin(_ args: [String]) throws {
+        guard ProcessInfo.processInfo.environment["HARNESS_TUNNEL"] != "1", !args.contains("--host"), !args.contains("--remote") else { throw PluginTrustError.localOnly }
+        let verb = args.count > 1 ? args[1] : "list"
+        switch verb {
+        case "list":
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let metadata = try TrustedPlugins.load().map { $0.manifest }
+            print(String(decoding: try encoder.encode(metadata), as: UTF8.self))
+        case "review", "trust":
+            guard let path = flagValue(args, flag: "--manifest") else { throw activityArgumentErrorForPlugin("Use plugin review|trust --manifest /absolute/plugin.json; trust requires --approve after reviewing the source") }
+            let plugin = try TrustedPlugins.prepare(URL(fileURLWithPath: (path as NSString).expandingTildeInPath))
+            if verb == "review" || !args.contains("--approve") { print(plugin.review); return }
+            try TrustedPlugins.approve(plugin); print("Reviewed entry code approved locally for " + plugin.id)
+        case "revoke":
+            guard let id = flagValue(args, flag: "--id") else { throw PluginTrustError.missing }
+            try TrustedPlugins.revoke(id); print("Plugin trust revoked for " + id)
+        case "run":
+            guard let id = flagValue(args, flag: "--id"), let action = flagValue(args, flag: "--action") else { throw PluginTrustError.missing }
+            let source = try TrustedPlugins.source(plugin: id, action: action)
+            let engine = try ScriptEngine(hosts: RemoteHostStore())
+            let origin = ScriptOrigin(rawValue: flagValue(args, flag: "--origin") ?? "cli") ?? .cli
+            engine.remoteControlEnabled = HarnessSettings.load().remoteControl
+            if let client = try? makeClient(args) {
+                let environment = APIEnvironment(environment: callerEnvironment(args) ?? [:])
+                engine.call = { method, arguments in APIExecutor.call(method: method, arguments: arguments, client: client, environment: environment, exposure: .lua) }
+            }
+            switch HarnessAPI.arguments(from: flagValue(args, flag: "--args") ?? "{}") {
+            case let .success(arguments): engine.setArguments(arguments)
+            case let .failure(error): throw activityArgumentErrorForPlugin(error.message)
+            }
+            // Plugins are one invocation. Persistent event handlers remain explicit scripts.
+            guard case .loaded = engine.load(source, from: "trusted-plugin:" + id + ":" + action, replacingFileLayer: false) else { throw activityArgumentErrorForPlugin("The approved plugin entry failed to execute. Review plugin source and dependencies before approving an update.") }
+            runQueued(engine.takeQueued(), origin: origin, args: args)
+            if engine.isStopped && engine.stopCode != 0 { exit(Int32(engine.stopCode)) }
+        default: throw activityArgumentErrorForPlugin("Use plugin list|review|trust|revoke|run")
+        }
+    }
+    private static func activityArgumentErrorForPlugin(_ message: String) -> NSError { NSError(domain: "HarnessPlugin", code: 2, userInfo: [NSLocalizedDescriptionKey: message]) }
+
     static func handleConfig(_ args: [String]) throws {
         let sub = args.count > 1 ? args[1] : ""
         let path = flagValue(args, flag: "--file") ?? ScriptConfigPath.resolve()
@@ -91,7 +130,7 @@ extension HarnessCLI {
         engine.poll = { feed?.poll() }
         if let client {
             let environment = APIEnvironment(environment: callerEnvironment(args) ?? [:])
-            engine.call = { method, arguments in APIExecutor.call(method: method, arguments: arguments, client: client, environment: environment) }
+            engine.call = { method, arguments in APIExecutor.call(method: method, arguments: arguments, client: client, environment: environment, exposure: .lua) }
             engine.log = { level, message in
                 fputs("[\(level)] \(message)\n", harnessStderr)
                 _ = try? client.request(.displayMessage(format: message, print: false), timeout: 2)

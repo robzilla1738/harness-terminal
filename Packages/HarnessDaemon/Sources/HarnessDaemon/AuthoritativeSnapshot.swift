@@ -22,7 +22,7 @@ struct SnapshotByteSpan: Equatable, Sendable {
 
 /// The visible screen as VT bytes (`PaneCapture.screen`) and the ring sequence it reflects.
 /// A screen-only attach paints it; a parked pane seals it to disk.
-struct ScreenFrame: Equatable, Sendable {
+struct ScreenFrame: Equatable, Sendable, Codable {
     var vt: Data
     var sequence: UInt64
     var checkpoint: Data? = nil
@@ -63,7 +63,7 @@ struct ScreenFrame: Equatable, Sendable {
 }
 
 /// The ring bytes an attaching client is sent, oldest first, and where live output resumes.
-struct AttachHistory: Equatable {
+struct AttachHistory: Equatable, Codable, Sendable {
     var chunks: [RealPty.ScrollbackReplaySegment]
     var endSequence: UInt64
     /// The client's `fromSequence` was evicted or absent: it must reset before painting.
@@ -73,6 +73,8 @@ struct AttachHistory: Equatable {
     var replaySizes: [ReplaySize]?
 }
 
+/// Compatibility with the old checkpoint envelope, used only by migration and its fixtures.
+/// New captures use HistoryProtection and never create an adjacent plaintext key.
 enum SnapshotCipher {
     static func seal(plain: Data, key: Data) -> Data? {
         let key = key32(key)
@@ -120,52 +122,6 @@ enum SnapshotCipher {
         var out = key
         out.append(Data(repeating: 0, count: 32 - key.count))
         return out
-    }
-}
-
-/// The snapshot key is a mode-0600 file next to the control socket, on every platform.
-/// (A key from the old keychain backend is not carried over: the sealed park file is only
-/// written today, never read back, so a fresh key loses nothing.)
-/// That is the same trust boundary as the socket and the scrollback log beside it; a
-/// keychain item added nothing but an access prompt whenever the daemon binary changed.
-enum SnapshotKeyStore {
-    static func loadOrCreate(socketDirectory: URL) -> Data {
-        fileLoadOrCreate(directory: socketDirectory)
-    }
-
-    static func fileLoadOrCreate(directory: URL) -> Data {
-        let url = directory.appendingPathComponent("snapshot.key")
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        if let existing = try? Data(contentsOf: url), existing.count == 32 {
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-            return existing
-        }
-        let created = randomKey()
-        // Created 0600 and renamed into place, so the key is never readable by others,
-        // not even between a write and a chmod.
-        let temporary = directory.appendingPathComponent("snapshot.key.\(UUID().uuidString)")
-        if FileManager.default.createFile(atPath: temporary.path, contents: created, attributes: [.posixPermissions: 0o600]) {
-            if rename(temporary.path, url.path) != 0 { try? FileManager.default.removeItem(at: temporary) }
-        }
-        return created
-    }
-
-    private static func randomKey() -> Data {
-        var bytes = Data(count: 32)
-        #if os(macOS)
-        _ = bytes.withUnsafeMutableBytes { buffer in
-            SecRandomCopyBytes(kSecRandomDefault, 32, buffer.baseAddress!)
-        }
-        #else
-        let fd = open("/dev/urandom", O_RDONLY)
-        if fd >= 0 {
-            _ = bytes.withUnsafeMutableBytes { buffer in
-                read(fd, buffer.baseAddress, 32)
-            }
-            close(fd)
-        }
-        #endif
-        return bytes
     }
 }
 

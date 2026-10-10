@@ -96,6 +96,7 @@ final class MobileBridge: @unchecked Sendable {
     private var latestRevision: Int?
     private var latestAttention: [RemoteAttention]?
     private var finished = false
+    private var daemonCapabilities: Set<String> = []
 
     init(client: DaemonClient) { self.client = client }
 
@@ -105,9 +106,10 @@ final class MobileBridge: @unchecked Sendable {
               let epoch = stats.epoch else {
             throw RemoteFailure(code: "updateRequired", message: "Update Harness on this host to the companion-ready release and restart Harness when your work permits")
         }
+        daemonCapabilities = Set(stats.capabilities ?? [])
         try writer.write(.hello(RemoteHello(cliVersion: HarnessVersion.short, daemonVersion: stats.version ?? "unknown",
             hostName: ProcessInfo.processInfo.hostName, daemonEpoch: epoch,
-            capabilities: (stats.capabilities ?? []) + ["appearance", "workspace-tools", "control-rpc", "snapshot-watch", "attention", "pane-attach", "terminal-checkpoint-v1", "resume", "styled-history", "file-upload", "device-key-install"])))
+            capabilities: (stats.capabilities ?? []) + ["appearance", "workspace-tools", "control-rpc", "snapshot-watch", "attention", "pane-attach", "terminal-checkpoint-v1", "resume", "styled-history", "file-upload"])))
         defer { closeAll() }
         var buffer = Data()
         var scratch = [UInt8](repeating: 0, count: 65536)
@@ -163,6 +165,9 @@ final class MobileBridge: @unchecked Sendable {
 
     private func call(_ request: RemoteRequest) throws -> JSONValue {
         let arguments = request.arguments
+        if CompanionAPICatalog.method(named: request.method) != nil {
+            try CompanionAPICatalog.validate(name: request.method, arguments: arguments.mapValues(companionArgument), exposure: .mobile, capabilities: daemonCapabilities)
+        }
         switch request.method {
         case "snapshot.get": return try value(snapshot())
         case "attention.get": return try value(attention())
@@ -183,14 +188,8 @@ final class MobileBridge: @unchecked Sendable {
             }
             guard case let .text(path) = try HarnessCLI.checkedRequest(client, .writeTempFile(name: name, data: data), timeout: 30) else { throw DaemonClientError.unexpectedResponse }
             return .string(path)
-        case "device.installKey":
-            guard let key = arguments["publicKey"]?.string else { throw RemoteFailure(code: "badArguments", message: "publicKey is required") }
-            try MobileDeviceKeys.install(key)
-            return .object(["ok": .bool(true)])
-        case "device.removeKey":
-            guard let key = arguments["publicKey"]?.string else { throw RemoteFailure(code: "badArguments", message: "publicKey is required") }
-            let removed = try MobileDeviceKeys.remove(key)
-            return .object(["ok": .bool(true), "removed": .bool(removed)])
+        case "device.installKey", "device.removeKey":
+            throw CompanionAPIError.denied
         case "pane.history":
             let pane = try resolvePane(arguments["pane"]?.string)
             guard case let .text(json) = try HarnessCLI.checkedRequest(client, .mobileHistory(surfaceID: pane.address.surfaceID,
@@ -242,7 +241,7 @@ final class MobileBridge: @unchecked Sendable {
             guard HarnessAPI.methods.contains(where: { $0.name == request.method }) else {
                 throw RemoteFailure(code: "unsupportedMethod", message: "Unknown companion method: \(request.method)")
             }
-            let result = APIExecutor.call(method: request.method, arguments: try arguments.mapValues(apiArgument), client: client, environment: APIEnvironment(environment: [:]))
+            let result = APIExecutor.call(method: request.method, arguments: try arguments.mapValues(apiArgument), client: client, environment: APIEnvironment(environment: [:]), exposure: .mobile)
             guard let json = result.json, result.message == nil else {
                 throw RemoteFailure(code: "api.\(result.exitCode)", message: result.message ?? "The operation failed")
             }
@@ -313,7 +312,7 @@ final class MobileBridge: @unchecked Sendable {
         }
     }
     private func attention() throws -> [RemoteAttention] {
-        guard case let .text(json) = try client.request(.listAttention) else { throw DaemonClientError.unexpectedResponse }
+        guard case let .text(json) = try client.request(.listAttention(capabilities: [DaemonStats.agentIdentities])) else { throw DaemonClientError.unexpectedResponse }
         return try JSONDecoder().decode([PaneAttention].self, from: Data(json.utf8)).map { row in
             RemoteAttention(address: PaneAddress(workspaceID: row.workspaceID.uuidString, sessionID: row.sessionID.uuidString,
                 tabID: row.tabID.uuidString, paneID: row.paneID.uuidString, surfaceID: row.surfaceID.uuidString), sessionName: row.sessionName,
@@ -384,6 +383,17 @@ final class MobileBridge: @unchecked Sendable {
         return pane
     }
     private func value<T: Encodable>(_ value: T) throws -> JSONValue { try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(value)) }
+    private func companionArgument(_ value: JSONValue) throws -> APIArgument {
+        // Specialized contracts decode their payloads with the exact wire types.
+        // The shared catalog checks top-level shapes; UInt64 output fingerprints
+        // must not be narrowed through the general API's signed Int argument model.
+        switch value {
+        case .object: return .object([:])
+        case .array: return .array([])
+        case .null: throw CompanionAPIError.arguments
+        default: return try apiArgument(value)
+        }
+    }
     private func apiArgument(_ value: JSONValue) throws -> APIArgument {
         switch value {
         case let .string(v): return .string(v)

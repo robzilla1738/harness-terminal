@@ -57,6 +57,85 @@ final class SSHTunnelManagerTests: XCTestCase {
         }
     }
 
+    /// Explicit disposable-host acceptance; the default suite never assumes a remote account.
+    func testConfiguredSSHUploadPreviewReuseAndDisconnect() throws {
+        guard let config = ProcessInfo.processInfo.environment["HARNESS_REMOTE_PROOF_CONFIG"],
+              let port = ProcessInfo.processInfo.environment["HARNESS_REMOTE_PROOF_PORT"].flatMap(Int.init) else {
+            throw XCTSkip("Supply a disposable, pinned SSH configuration and loopback web port for remote acceptance.")
+        }
+        let remote = host(name: "proof", target: "harness-remote-proof", remoteSocket: "/tmp/hremote-plan/harness.sock", sshArgs: ["-F", config])
+        let manager = SSHTunnelManager(); defer { manager.stopAll() }
+        let endpoint = try manager.endpoint(for: remote)
+        let client = DaemonClient(endpoint: endpoint)
+        guard case .pong = try client.request(.ping) else { return XCTFail("Authenticated remote ping failed") }
+        XCTAssertEqual(try manager.endpoint(for: remote), endpoint)
+        let bytes = Data("synthetic remote image/file fixture".utf8)
+        guard case let .text(path) = try client.request(.writeTempFile(name: "image ' fixture.png", data: bytes)) else { return XCTFail("Remote upload failed") }
+        XCTAssertTrue(path.hasPrefix("/tmp/hremote-plan/"))
+        let read = try ProcessCapture.run(URL(fileURLWithPath: "/usr/bin/ssh"), arguments: ["-F", config, remote.sshTarget, "stat -c '%a' -- " + ShellQuoting.quote(path) + "; cat -- " + ShellQuoting.quote(path)], timeout: 5, maxOutputBytes: 4096)
+        XCTAssertEqual(read.status, 0)
+        XCTAssertEqual(String(decoding: read.stdout, as: UTF8.self), "600\n" + String(decoding: bytes, as: UTF8.self))
+        let surface = UUID(), token = UUID(), specification = PreviewSpecification(url: "http://localhost:\(port)/?fixture=1#proof")
+        let url = try manager.previewURL(for: remote, surfaceID: surface, token: token, specification: specification)
+        XCTAssertEqual(url.host, "127.0.0.1"); XCTAssertEqual(url.query, "fixture=1"); XCTAssertEqual(url.fragment, "proof")
+        let page = try ProcessCapture.run(URL(fileURLWithPath: "/usr/bin/curl"), arguments: ["--fail", "--silent", url.absoluteString], timeout: 5, maxOutputBytes: 4096)
+        XCTAssertEqual(page.status, 0); XCTAssertTrue(String(decoding: page.stdout, as: UTF8.self).contains("authenticated remote preview proof"))
+        XCTAssertEqual(try manager.previewURL(for: remote, surfaceID: surface, token: token, specification: specification), url)
+        let epoch = manager.connectionEpoch(for: remote.name)
+        manager.stop(host: remote.name)
+        XCTAssertThrowsError(try manager.endpoint(for: remote, expectedEpoch: epoch))
+        XCTAssertThrowsError(try manager.previewURL(for: remote, surfaceID: surface, token: token, specification: specification, expectedEpoch: epoch))
+        XCTAssertFalse(manager.isConnected(remote.name))
+    }
+
+    func testLargeSSHDiagnosticsAreDrainedAndRemainActionable() throws {
+        let manager = SSHTunnelManager(makeTunnelProcess: { _, _ in
+            let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+            process.arguments = ["-c", "import sys; sys.stderr.write('debug fixture\\n' * 100000); sys.stderr.write('Permission denied (publickey).\\n'); sys.stderr.flush(); sys.exit(255)"]
+            process.standardError = Pipe(); process.standardOutput = FileHandle.nullDevice
+            return process
+        }, reachabilityProbe: { _ in false })
+        defer { manager.stopAll() }
+        XCTAssertThrowsError(try manager.endpoint(for: host(), waitTimeout: 3)) { error in
+            guard case let SSHTunnelError.rejected(_, reason) = error else { return XCTFail("Expected an actionable drained diagnostic: \(error)") }
+            XCTAssertTrue(reason.contains("authentication failed"))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: SSHTunnelManager.logURL(for: HarnessPaths.tunnelSocketURL(forHost: "devbox")).path))
+    }
+
+    func testPreviewForwardOwnsItsPortAndStaleViewOrDisconnectCannotReplaceIt() throws {
+        var process: Process?
+        var launches = 0
+        var remoteAddresses: [String] = []
+        let manager = SSHTunnelManager(makeTunnelProcess: nil, reachabilityProbe: nil, makePreviewProcess: { _, port, address, _ in
+            launches += 1
+            remoteAddresses.append(address)
+            let child = Process(); child.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+            child.arguments = ["-c", "import socket,sys,time; s=socket.socket(); s.bind(('127.0.0.1',int(sys.argv[1]))); s.listen(); time.sleep(60)", String(port)]
+            child.standardInput = FileHandle.nullDevice; child.standardOutput = FileHandle.nullDevice; child.standardError = FileHandle.nullDevice
+            process = child; return child
+        })
+        defer { manager.stopAll() }
+        let surface = UUID(), first = UUID(), second = UUID(), spec = PreviewSpecification(url: "http://[::1]:3000/page?x=1#top")
+        let epoch = manager.connectionEpoch(for: "devbox")
+        let url = try manager.previewURL(for: host(), surfaceID: surface, token: first, specification: spec, expectedEpoch: epoch)
+        let child = try XCTUnwrap(process), port = try XCTUnwrap(url.port)
+        XCTAssertEqual(url.host, "127.0.0.1"); XCTAssertEqual(url.path, "/page"); XCTAssertEqual(url.query, "x=1"); XCTAssertEqual(url.fragment, "top")
+        XCTAssertTrue(SSHTunnelManager.ownsLoopbackListener(pid: child.processIdentifier, port: port))
+        XCTAssertFalse(SSHTunnelManager.ownsLoopbackListener(pid: getpid(), port: port))
+        XCTAssertEqual(try manager.previewURL(for: host(), surfaceID: surface, token: second, specification: spec, expectedEpoch: epoch), url)
+        XCTAssertEqual(launches, 1)
+        XCTAssertEqual(remoteAddresses, ["[::1]"])
+        manager.stopPreview(host: "devbox", surfaceID: surface, token: first)
+        XCTAssertTrue(child.isRunning)
+        _ = try manager.previewURL(for: host(), surfaceID: surface, token: second, specification: PreviewSpecification(url: "http://127.0.0.2:3000"), expectedEpoch: epoch)
+        XCTAssertEqual(remoteAddresses, ["[::1]", "127.0.0.2"], "Changing the remote interface must replace a same-port forward")
+        manager.stop(host: "devbox")
+        XCTAssertThrowsError(try manager.previewURL(for: host(), surfaceID: surface, token: second, specification: spec, expectedEpoch: epoch))
+        XCTAssertThrowsError(try manager.endpoint(for: host(), expectedEpoch: epoch))
+        XCTAssertEqual(launches, 2)
+    }
+
     // MARK: - Socket-path construction (pure, no SSH)
 
     func testTunnelSocketPathIsDeterministicAndUnderTunnelsDir() {
@@ -264,8 +343,8 @@ final class SSHTunnelManagerTests: XCTestCase {
                 return XCTFail("expected .notReady, got \(error)")
             }
         }
-        // On the notReady path the manager tears its own tunnel down.
-        XCTAssertFalse(manager.isConnected("devbox"))
+        // A timeout cannot authorize replacing a potentially healthy SSH process.
+        XCTAssertTrue(manager.isConnected("devbox"))
     }
 
     func testProcessThatFailsToLaunchSurfacesAsNotReady() {

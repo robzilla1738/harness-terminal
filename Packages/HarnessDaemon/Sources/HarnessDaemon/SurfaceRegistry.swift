@@ -5,7 +5,88 @@ import HarnessTerminalEngine
 /// Single source of truth for Harness session layout and notifications.
 /// @unchecked Sendable: all access to `sessions` and `editor` is serialized by `lock`.
 public final class SurfaceRegistry: @unchecked Sendable {
-    var sessions: [DaemonSurfaceID: RealPty] = [:]
+    var sessions: [DaemonSurfaceID: SessionPty] = [:]
+    private let mutationLease: DaemonMutationLease?
+    let activity: AgentActivityService
+    let usage: TranscriptUsageService
+    let resources = ProcessResourceService()
+    let worktrees: WorktreeService
+    private let fanoutLock = NSLock()
+    private var fanoutService: FanoutService?
+    var fanout: FanoutService {
+        fanoutLock.lock(); defer { fanoutLock.unlock() }
+        if let fanoutService { return fanoutService }
+        let service = FanoutService(store: activity.store, hostID: activity.hostID, worktrees: worktrees,
+        workspace: { [weak self] requested in
+            guard let self, self.activity.hostIdentityFailure == nil else { throw FanoutError.history }
+            self.lock.lock(); defer { self.lock.unlock() }
+            guard !self.quiesced, !self.shuttingDown, let id = requested ?? self.editor.snapshot.activeWorkspaceID,
+                  self.editor.snapshot.workspaces.contains(where: { $0.id == id }) else { throw FanoutError.invalid }
+            return id
+        }, observeOwned: { [weak self] body in
+            guard let self else { return }
+            self.lock.lock()
+            guard !self.quiesced, !self.shuttingDown else { self.lock.unlock(); return }
+            self.hostedMutations.enter(); self.lock.unlock()
+            defer { self.hostedMutations.leave() }; body()
+        }, launch: { [weak self] group, participant, launch, input in
+            guard let self else { throw FanoutError.host }
+            return try self.launchFanoutWorkload(group: group, participant: participant, specification: launch, input: input)
+        })
+        fanoutService = service; return service
+    }
+    private let schedulesLock = NSLock()
+    private var scheduleService: ScheduleService?
+    var schedules: ScheduleService {
+        schedulesLock.lock(); defer { schedulesLock.unlock() }
+        if let scheduleService { return scheduleService }
+        let service = ScheduleService(store: activity.store, observeOwned: { [weak self] body in
+            guard let self else { return }
+            self.lock.lock(); guard !self.quiesced, !self.shuttingDown else { self.lock.unlock(); return }
+            self.hostedMutations.enter(); self.lock.unlock(); defer { self.hostedMutations.leave() }; body()
+        }, limits: { [weak self] now in
+            guard let self else { throw ScheduleError.unavailable("Host stopped.") }
+            return try self.usage.summary(from: now.addingTimeInterval(-86400), to: now)
+        }, launch: { [weak self] record, occurrence in
+            guard let self, self.activity.hostIdentityFailure == nil else { throw OwnedWorkloadLaunchError.notAccepted("Host identity is unavailable.") }
+            let definition = record.definition
+            return try self.launchOwnedWorkload(workspaceID: definition.workspaceID, surfaceID: occurrence.surfaceID, workloadID: occurrence.id,
+                provider: definition.provider, title: "Scheduled · " + definition.name, specification: definition.launch, input: Data((definition.input ?? "").utf8))
+        })
+        scheduleService = service; return service
+    }
+    func suspendScheduling() { schedules.suspend() }
+    private let aiSummariesLock = NSLock()
+    private var aiSummaryService: AISummaryService?
+    var aiSummaries: AISummaryService {
+        aiSummariesLock.lock(); defer { aiSummariesLock.unlock() }
+        if let aiSummaryService { return aiSummaryService }
+        let service = AISummaryService(store: activity.store, settings: HarnessSettings.load().aiSummaries,
+            observeOwned: { [weak self] body in
+                guard let self else { return }
+                self.lock.lock(); guard !self.quiesced, !self.shuttingDown else { self.lock.unlock(); return }
+                self.hostedMutations.enter(); self.lock.unlock(); defer { self.hostedMutations.leave() }; body()
+            }, buildInput: { [weak self] workspace, from, to, categories in
+                guard let self else { throw AISummaryError.unavailable("The host stopped.") }
+                return try self.buildAISummaryInput(workspaceID: workspace, from: from, to: to, categories: categories)
+            })
+        aiSummaryService = service; return service
+    }
+    func suspendAISummaries() { aiSummaries.suspend() }
+    let notifications: NotificationService
+    let power: PowerService
+    let observationQueue = DispatchQueue(label: "com.harness.daemon.observations")
+    let observationBudget = ObservationBudget()
+    let hostedMutations = DispatchGroup()
+    let automaticResumeQueue: OperationQueue = {
+        let queue = OperationQueue(); queue.name = "com.harness.automatic-resume"
+        queue.maxConcurrentOperationCount = 4; queue.qualityOfService = .utility; return queue
+    }()
+    let automaticResumeSlots = DispatchSemaphore(value: 128)
+    var automaticResumeStarted: Set<String> = []
+    var surfaceCreations: Set<String> = []
+    var surfaceClosures: Set<String> = []
+    var quiesced = ProcessInfo.processInfo.environment["HARNESS_DAEMON_WARM"] == "1"
     var editor = SessionEditor()
     private lazy var store = SessionStore(onSaveError: { [weak self] message in
         fputs("HarnessDaemon: session persistence failed — \(message)\n", harnessStderr)
@@ -36,7 +117,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
     public let environmentStore = EnvironmentStore()
     public let hookRegistry = HookRegistry()
     private let persistedDefaultShell: String?
-    private let persistedScrollbackBytes: Int
+    let persistedScrollbackBytes: Int
     /// One-shot first-run / post-update banner, consumed by the first freshly created
     /// surface (see `injectVersionBannerIfPending`). nil when disabled (tests, embedded
     /// registries) or once shown for this build.
@@ -76,6 +157,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
     private var followLog: [FollowEvent] = []
 
     var monitors: [String: SurfaceMonitor] = [:]
+    var observerRecoveries: Set<String> = []
     let monitorLock = NSLock()
     var monitorTimer: DispatchSourceTimer?
     private var lastIdleParkCheck = Date.distantPast
@@ -102,16 +184,28 @@ public final class SurfaceRegistry: @unchecked Sendable {
     /// Test-only: counts full `processMonitors` passes (the ones that take the registry
     /// lock), so a test can prove a quiet tick skipped it.
     var monitorFullPasses = 0
-    public init(enableVersionBanner: Bool = false) {
+    /// Embedded hosts may supply their credential-backed history protection. Hosted
+    /// PTYs retain the session owner's key; a replacement daemon cannot change it.
+    private let embeddedHistoryProtection: HistoryProtection?
+    public init(enableVersionBanner: Bool = false, enablePowerManagement: Bool = false, mutationLease: DaemonMutationLease? = nil, historyProtection: HistoryProtection? = nil) {
+        embeddedHistoryProtection = historyProtection
+        self.mutationLease = mutationLease
+        if SessionHostClient.configured != nil, mutationLease?.isHeld != true { quiesced = true }
         let settings = HarnessSettings.load()
         let defaultShell = settings.defaultShell
         persistedScrollbackBytes = ScrollbackBudget.rawBytes(forLines: settings.scrollbackLines)
         let trimmedDefaultShell = defaultShell.trimmingCharacters(in: .whitespacesAndNewlines)
         persistedDefaultShell = trimmedDefaultShell.isEmpty ? nil : defaultShell
+        power = PowerService(settings: settings.power, nativeEnabled: enablePowerManagement)
+        let warmActivity = quiesced
+        activity = AgentActivityService(store: historyProtection.map { ActivityStore(protection: $0, writable: !warmActivity) }, warm: warmActivity)
+        worktrees = WorktreeService(store: activity.store, hostID: activity.hostID, settings: settings.worktrees, hostIdentityFailure: activity.hostIdentityFailure)
+        notifications = NotificationService(store: activity.store, settings: settings)
+        usage = TranscriptUsageService(store: activity.store, hostID: activity.hostID, warm: quiesced, settings: settings.activity)
         // Captured before `store.load()` materializes anything: "no layout.json" is what
         // distinguishes a true first install (welcome banner) from an update (what's-new).
         let hadExistingLayout = FileManager.default.fileExists(atPath: HarnessPaths.snapshotURL.path)
-        if enableVersionBanner {
+        if enableVersionBanner, !quiesced {
             let lastSeen = versionBannerStore.loadLastSeenBuild()
             pendingVersionBanner = VersionBannerStore.decidePending(
                 lastSeenBuild: lastSeen,
@@ -128,10 +222,17 @@ public final class SurfaceRegistry: @unchecked Sendable {
         editor.snapshot = store.load()
         if editor.snapshot.workspaces.isEmpty {
             editor.snapshot = SessionSnapshot()
-            try? store.saveImmediately(editor.snapshot)
+            if !quiesced { try? store.saveImmediately(editor.snapshot) }
         }
         startupMillis["layout"] = Self.millis(since: &phase)
-        ensureAllSnapshotSurfaces()
+        lock.lock(); ensureAllSnapshotSurfaces(); lock.unlock()
+        if let host = SessionHostClient.configured, case let .inventory(ids) = try? host.request(.inventory) {
+            for id in ids where sessions[id] == nil {
+                lock.lock()
+                _ = createOrEnsureSurface(surfaceID: id, cwd: nil, shell: nil, rows: 24, cols: 80, scrollbackBytes: nil)
+                lock.unlock()
+            }
+        }
         startupMillis["surfaces"] = Self.millis(since: &phase)
         // A first install has no layout to restore — the seeded default tab IS the first
         // surface the user ever sees, so the welcome banner lands there instead of waiting
@@ -143,7 +244,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
            let firstSession = sessions[firstID.uuidString] {
             injectVersionBannerIfPending(into: firstSession, columns: 80)
         }
-        cleanupOrphanScrollbackFiles()
+        if !quiesced, SessionHostClient.configured == nil { cleanupOrphanScrollbackFiles() }
         // Wire hook execution: bound commands run server-side via the registry's own
         // handlers. `fire` invokes this on `hookQueue` (off-lock), so re-entering
         // `handle` here is safe.
@@ -153,28 +254,83 @@ public final class SurfaceRegistry: @unchecked Sendable {
             executor.execute(command, context: context)
         }
         refreshSilenceArmedCache() // seed from the on-disk option store before the timer runs
-        startMonitorTimer()
+        if !quiesced {
+            for key in sessions.keys where !resolvedPersistScrollback(forSurfaceKey: key) {
+                do { try activity.setPersistence(surfaceID: key, enabled: false) }
+                catch { reportPersistenceError(error.localizedDescription) }
+            }
+        }
+        activity.onTranscript = { [weak usage] run, path in usage?.bind(run, path: path) }
+        activity.onChange = { [weak self] run in self?.applyCanonicalRun(run); self?.power.refresh(); self?.notifications.observe(run) }
+        power.workingProvider = { [weak activity] in
+            activity?.workingProcesses().filter { ProcessScan.generation($0.pid) == $0.generation }.count ?? 0
+        }
+        power.onSleep = { [weak notifications] in notifications?.submit(NotificationNotice(surfaceID: nil, event: .systemSleep, title: "Harness is sleeping", message: "Local execution pauses while macOS sleeps.")) }
+        power.onWake = { [weak notifications] seconds in
+            notifications?.submit(NotificationNotice(surfaceID: nil, event: .systemWake, title: "Harness woke", message: seconds.map { "Observed sleep: \(Int($0)) seconds. Local execution paused during sleep." } ?? "macOS woke; elapsed sleep is unavailable."))
+        }
+        if !quiesced { startMonitorTimer() }
     }
 
-    /// Re-resolve `persist-scrollback` for the live surfaces a `set-option` can affect (an
-    /// exact pane target hits one; broader scopes re-resolve all) and push the result into
-    /// each surface's scrollback file. Runs under the registry lock (called from `handle`).
-    private func applyScrollbackPersistenceOption(scope: OptionStore.Scope, target: String?) {
-        let affected: [String]
-        if scope == .pane, let target {
-            // Pane targets arrive in TWO spellings: `-T <surface-id>` names the surface
-            // directly, while both front-ends' no-target forms (CLI `callingPaneTarget`,
-            // GUI `CommandIPCTranslator`) send the owning `PaneLeaf.id` — an independent
-            // UUID. Accept either; a target matching neither names no live pane (the
-            // spawn-time read still picks the stored value up for a later revive).
-            let surfaceKey = sessions[target] != nil ? target : surfaceKey(forPaneID: target)
-            affected = surfaceKey.map { [$0] } ?? []
-        } else {
-            affected = Array(sessions.keys)
+    private func setHistoryPersistence(scope rawScope: String, target: String?, raw: String) -> IPCResponse {
+        guard let scope = OptionStore.Scope(rawValue: rawScope), scope == .pane || scope == .global,
+              scope == .global || target != nil, !(target?.contains(":") ?? false) else {
+            return .error("persist-scrollback requires global scope or an exact pane target")
         }
-        for key in affected {
-            sessions[key]?.setScrollbackPersistence(enabled: resolvedPersistScrollback(forSurfaceKey: key))
+        guard ["on", "off", "true", "false", "yes", "no", "1", "0"].contains(raw.lowercased()) else { return .error("persist-scrollback requires on or off") }
+        let value = OptionStore.Value(parsing: raw)
+        lock.lock()
+        guard !quiesced, !shuttingDown else { lock.unlock(); return .error("History handover is in progress; retry the persistence change.") }
+        hostedMutations.enter()
+        defer { hostedMutations.leave() }
+        optionStore.set(value, key: "persist-scrollback", scope: scope, target: target)
+        let affected: [String] = scope == .pane ? (target.flatMap { sessions[$0] != nil ? $0 : surfaceKey(forPaneID: $0) }.map { [$0] } ?? []) : Array(sessions.keys)
+        let updates = affected.compactMap { key -> (String, SessionPty, Bool)? in
+            guard let pty = sessions[key] else { return nil }
+            return (key, pty, resolvedPersistScrollback(forSurfaceKey: key))
         }
+        lock.unlock()
+        do {
+            if scope == .global || updates.isEmpty {
+                var offset = 0
+                repeat {
+                    let page = try activity.store.list(offset: offset, limit: 500)
+                    for run in page.runs {
+                        guard scope == .global || run.surfaceID == target || run.paneID == target else { continue }
+                        lock.lock(); let enabled = resolvedPersistScrollback(forSurfaceKey: run.surfaceID, recordedPaneID: run.paneID); lock.unlock()
+                        if !enabled {
+                            usage.setPersistence(surfaceID: run.surfaceID, enabled: false)
+                            try activity.setPersistence(surfaceID: run.surfaceID, enabled: false)
+                            aiSummaries.purgeCapturedText(surfaceID: run.surfaceID)
+                            try notifications.purgeCapturedText(surfaceID: run.surfaceID)
+                            // Closed panes have no live writer, but their retained files
+                            // and command/span caches still belong to the same opt-out.
+                            lock.lock(); let closed = sessions[run.surfaceID] == nil; lock.unlock()
+                            if closed, let host = SessionHostClient.configured {
+                                _ = try host.request(.persist(run.surfaceID, false))
+                                continue
+                            }
+                            let history = HarnessPaths.scrollbackFileURL(forSurfaceID: run.surfaceID)
+                            for file in [history, history.appendingPathExtension("sizes"), history.deletingLastPathComponent().appendingPathComponent(run.surfaceID + ".park")] {
+                                if closed, FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
+                            }
+                        }
+                    }
+                    guard let next = page.nextOffset else { break }; offset = next
+                } while true
+            }
+            for (key, pty, enabled) in updates {
+                // Ledger policy changes before the PTY writer; no registry lock crosses
+                // either store's queue or the session-host RPC boundary.
+                usage.setPersistence(surfaceID: key, enabled: enabled)
+                try activity.setPersistence(surfaceID: key, enabled: enabled)
+                if !enabled { aiSummaries.purgeCapturedText(surfaceID: key); try notifications.purgeCapturedText(surfaceID: key) }
+                try pty.changeScrollbackPersistence(enabled: enabled)
+            }
+            lock.lock(); let revision = editor.snapshot.revision; lock.unlock()
+            onSnapshotCommitted?(revision)
+            return .ok
+        } catch { return .error("The persistence setting was saved, but updating or removing history failed: " + error.localizedDescription) }
     }
 
     /// The surface backing the pane leaf whose `PaneLeaf.id` is `paneID`, from the layout
@@ -199,8 +355,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
     /// must consult both exact targets before the global fallback. Exact-match reads (not
     /// `OptionStore.get`, whose miss falls through to global) so a pane-level value under
     /// the second spelling isn't shadowed by the global default.
-    private func resolvedPersistScrollback(forSurfaceKey surfaceID: String) -> Bool {
-        let paneID = editor.paneLocation(forSurfaceKey: surfaceID)?.paneID.uuidString
+    func resolvedPersistScrollback(forSurfaceKey surfaceID: String, recordedPaneID: String? = nil) -> Bool {
+        let paneID = recordedPaneID ?? editor.paneLocation(forSurfaceKey: surfaceID)?.paneID.uuidString
         for target in [surfaceID, paneID] {
             guard let target else { continue }
             if let value = optionStore.snapshot(scope: .pane)
@@ -270,14 +426,78 @@ public final class SurfaceRegistry: @unchecked Sendable {
         metrics.recordLockWait(nanos: DispatchTime.now().uptimeNanoseconds &- start)
     }
 
-    public func handle(_ request: IPCRequest) -> IPCResponse {
+    var shuttingDown = false
+
+    public func beginShutdown(requireEmpty: Bool) -> IPCResponse {
         acquireRegistryLock()
         defer { lock.unlock() }
+        guard !requireEmpty || sessions.isEmpty else {
+            return .error("Preserved \(sessions.count) live shells. Close them first or explicitly use --force.")
+        }
+        shuttingDown = true
+        return .ok
+    }
+
+    private let uploadSlots = DispatchSemaphore(value: 4)
+    public func handle(_ request: IPCRequest) -> IPCResponse {
+        if case let .writeTempFile(name, data) = request {
+            guard uploadSlots.wait(timeout: .now()) == .success else { return .error("File uploads are busy; retry after another upload finishes.") }
+            defer { uploadSlots.signal() }
+            lock.lock()
+            guard !quiesced, !shuttingDown else { lock.unlock(); return .error("History handover is in progress; retry this upload shortly.") }
+            hostedMutations.enter(); lock.unlock()
+            defer { hostedMutations.leave() }
+            switch PastedFiles.write(data, named: name) {
+            case let .success(path): return .text(path)
+            case let .failure(error): return .error(error.message)
+            }
+        }
+        if case .retryHistory = request {
+            lock.lock()
+            guard !quiesced, !shuttingDown else { lock.unlock(); return .error("History handover is in progress; retry recovery shortly.") }
+            hostedMutations.enter(); lock.unlock()
+            defer { hostedMutations.leave() }
+            do {
+                let protection = HistoryProtection.system()
+                usage.suspend()
+                defer { try? usage.activate() }
+                try activity.recoverHistory(protection: protection)
+                lock.lock(); let local = sessions.values.compactMap(\.local); lock.unlock()
+                for pty in local { try pty.recoverHistory(protection: protection) }
+                return .ok
+            } catch { return .error("History recovery did not complete; programs remain running. " + error.localizedDescription) }
+        }
+        if case let .snoozeAttention(surface, minutes) = request, notifications.isActive {
+            return setNotificationSnooze(surfaceID: surface, minutes: minutes)
+        }
+        if case let .activity(operation) = request { return handleActivity(operation) }
+        if case let .setOption(scope, target, key, raw) = request, key == "persist-scrollback" {
+            return setHistoryPersistence(scope: scope, target: target, raw: raw)
+        }
+        if let response = nonterminalControlError(request) { return response }
+        if let response = hostedTerminalMutation(request) { return response }
+        if let response = hostedTerminalQuery(request) { return response }
+        acquireRegistryLock()
+        var reserved = false
+        defer { lock.unlock(); if reserved { hostedMutations.leave() } }
+        guard !shuttingDown else { return .error("Session service is shutting down; retry after it starts.") }
+        if quiesced {
+            switch request {
+            case .ping, .getSnapshot, .getSnapshotForClient: break
+            default: return .error("Daemon handover is in progress. Terminal streams remain available; retry this control request.")
+            }
+        }
+        if !quiesced { hostedMutations.enter(); reserved = true }
         switch request {
-        case .searchOutput, .searchPaths, .validateOutputMatch, .cancelSearch:
+        case .activity: return .error("Activity requests require the activity service")
+        case .shutdownDaemon, .handoverDaemon, .replaceDaemon, .retryHistory:
+            return .error("Administration requires the daemon listener")
+        case .searchOutput, .searchOutputFiltered, .searchPaths, .validateOutputMatch, .cancelSearch:
             return .error("Search requests require the daemon search worker")
         case let .library(operation):
-            return handleLibrary(operation)
+            return handleLibrary(operation, capabilities: [])
+        case let .libraryForClient(operation, capabilities):
+            return handleLibrary(operation, capabilities: capabilities)
         case .ping:
             return .pong
         case .listWorkspaces:
@@ -286,11 +506,17 @@ public final class SurfaceRegistry: @unchecked Sendable {
             })
         case .listSurfaces:
             return .surfaces(editor.listSurfaces())
-        case .listAgents:
-            return .agents(editor.listAgents())
-        case .listAttention:
+        case let .listAgents(capabilities):
+            return .agents(editor.listAgents().map { row in
+                var row = row; row.kind = row.kind.projected(for: capabilities ?? []); return row
+            })
+        case let .listAttention(capabilities):
             do {
-                return .text(String(decoding: try JSONEncoder().encode(editor.listAttention()), as: UTF8.self))
+                return .text(String(decoding: try JSONEncoder().encode(editor.listAttention().map { row in
+                    var row = row
+                    if let kind = row.activity.agent?.kind { row.activity.agent?.kind = kind.projected(for: capabilities ?? []) }
+                    return row
+                }), as: UTF8.self))
             } catch { return .error(error.localizedDescription) }
         case let .acknowledgeAttention(surfaceID):
             guard let id = UUID(uuidString: surfaceID), editor.snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs).contains(where: { $0.rootPane.allSurfaceIDs().contains(id) }) else { return .error("Pane not found") }
@@ -613,7 +839,10 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 body: body
             )
             let snoozed = editor.listAttention().first { $0.surfaceID.uuidString == surfaceID }?.activity.isSnoozed ?? false
-            if !snoozed { NotificationBus.shared.post(notification) }
+            if !snoozed {
+                NotificationBus.shared.post(notification)
+                notifications.submit(NotificationNotice(surfaceID: surfaceID, runID: activity.currentRun(surfaceID: surfaceID)?.id, event: .agentWaiting, title: title, message: body))
+            }
             markWaiting(surfaceKey: surfaceID, text: body)
             noteProgramStatusNotifiedLocked(surfaceID)
             commit()
@@ -651,8 +880,24 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 commit()
             }
             return .ok
+        case let .previewPane(surfaceID, specification, updateExisting, capabilities):
+            guard capabilities.contains(DaemonStats.paneContent) else { return .error(PreviewError.unsupported.localizedDescription) }
+            do { _ = try specification.validatedURL() } catch { return .error(error.localizedDescription) }
+            guard let source = UUID(uuidString: surfaceID), let location = editor.paneLocation(forSurfaceKey: surfaceID),
+                  let workspace = editor.snapshot.workspaces.first(where: { $0.sessions.contains(where: { $0.tabs.contains(where: { $0.id == location.tabID }) }) }),
+                  let tab = workspace.sessions.flatMap(\.tabs).first(where: { $0.id == location.tabID }),
+                  let leaf = tab.rootPane.allLeaves().first(where: { $0.surfaceID == source }) else { return .error("The selected pane has closed.") }
+            if updateExisting {
+                guard case .preview = leaf.paneContent, sessions[surfaceID] == nil else { return .error("Only an existing preview can change its URL. Create a new preview beside a terminal to preserve its shell.") }
+                _ = editor.setPaneContent(surfaceID: source, content: .preview(specification)); commit(); return .paneID(leaf.id)
+            }
+            guard let id = editor.splitPane(in: workspace.id, tabID: tab.id, paneID: leaf.id, direction: .horizontal), let newSurface = editor.surfaceID(forPaneID: id) else { return .error("Could not create a preview pane.") }
+            _ = editor.setPaneContent(surfaceID: newSurface, content: .preview(specification))
+            commit(); return .paneID(id)
         case .getSnapshot:
-            return .snapshot(editor.snapshot)
+            return .snapshot(editor.snapshot.projected(for: []))
+        case let .getSnapshotForClient(capabilities):
+            return .snapshot(editor.snapshot.projected(for: capabilities))
         case let .createSurface(cwd, shell):
             let surfaceID = UUID().uuidString
             return createOrEnsureSurface(
@@ -708,8 +953,9 @@ public final class SurfaceRegistry: @unchecked Sendable {
         case let .pipePane(surfaceID, shellCommand):
             guard sessions[surfaceID] != nil else { return .error("Surface not found") }
             if let shellCommand, !shellCommand.isEmpty {
-                startPipe(surfaceID: surfaceID, shellCommand: shellCommand)
+                if let error = startPipe(surfaceID: surfaceID, shellCommand: shellCommand) { return .error(error) }
             } else {
+                guard !pipeChanges.contains(surfaceID) else { return .error("The pipe is being launched; retry after it finishes.") }
                 stopPipe(surfaceID: surfaceID)
             }
             return .ok
@@ -833,7 +1079,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             return .replayResult(text: result.text, endSequence: result.endSequence)
         case let .resizeSurface(surfaceID, rows, cols):
             guard TerminalGeometry.isValid(cols: Int(cols), rows: Int(rows)) else { return .error("Terminal dimensions exceed the supported grid limit.") }
-            sessions[surfaceID]?.resize(rows: rows, cols: cols)
+            guard let session = sessions[surfaceID], session.resize(rows: rows, cols: cols) else { return .error("Resize could not be applied; the pane may have closed or its input queue is busy.") }
             return .ok
         case .detachSurface:
             // Per-client detach is owned by DaemonServer, which knows *which* connection asked
@@ -983,7 +1229,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 return .ok
             }
             // A naturally-exited `remain-on-exit` pane keeps its dead leaf in the layout, but its
-            // RealPty was dropped from `sessions` on exit — so respawn-pane (whose entire purpose is
+            // SessionPty was dropped from `sessions` on exit — so respawn-pane (whose entire purpose is
             // reviving such a pane) must recreate the surface rather than fail "Surface not found".
             // Only when the dead leaf still resolves; an unknown surface is a real error.
             guard surfaceTab != nil else { return .error("Surface not found") }
@@ -999,7 +1245,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 reviveScrollbackBytes = onDisk > 0 ? max(onDisk, 1024 * 1024) : nil
             } else {
                 // Honor `-k`: drop the persisted scrollback before the revived surface seeds its ring
-                // from disk, so it starts clean. The RealPty that normally owns this file is gone, so
+                // from disk, so it starts clean. The SessionPty that normally owns this file is gone, so
                 // delete it directly; the default cap is fine on a now-empty history.
                 try? FileManager.default.removeItem(at: scrollbackURL)
                 try? FileManager.default.removeItem(at: scrollbackURL.appendingPathExtension("sizes"))
@@ -1054,7 +1300,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             // the next spawn"); re-enabling resumes persistence from that point — including
             // for surfaces spawned while the option was off (they carry a suspended log
             // writer) — documented in docs/SECURITY-POSTURE.md.
-            if key == "persist-scrollback" { applyScrollbackPersistenceOption(scope: scope, target: target) }
+
             // Nudge snapshot subscribers (the attach-window compositor) so a runtime option
             // change — status-*, mouse, pane-style, mode-keys — reaches attached clients instead
             // of being stuck at their startup values. Re-uses the snapshot push as a generic
@@ -1122,11 +1368,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
             guard let session = sessions[surfaceID] else { return .error("Surface not found") }
             session.injectSyntheticOutput(Data([0x1B, 0x63]))
             return .ok
-        case let .writeTempFile(name, data):
-            switch PastedFiles.write(data, named: name) {
-            case let .success(path): return .text(path)
-            case let .failure(error): return .error(error.message)
-            }
+        case .writeTempFile:
+            return .error("File uploads require the bounded upload path")
         case .mobileHistory, .mobileHistoryMatch, .paneWait, .subscribeEvents, .publishKeymap, .noteHostsChanged, .presentClient, .attachStream,
              .noteClientConnection, .noteTailscaleStatus:
             return .error("handled by the daemon server")
@@ -1185,15 +1428,16 @@ public final class SurfaceRegistry: @unchecked Sendable {
 
     public func subscribe(
         surfaceID: String,
+        onResize: (@Sendable (ReplaySize) -> Void)? = nil,
         handler: @escaping @Sendable (Data, UInt64) -> Void
     ) -> UUID? {
         lock.lock()
         let session = sessions[surfaceID]
         lock.unlock()
-        return session?.subscribe(handler)
+        return session?.subscribe(onResize: onResize, handler)
     }
 
-    /// What an attaching client is sent (`RealPty.attachHistory`).
+    /// What an attaching client is sent (`SessionPty.attachHistory`).
     func attachHistory(surfaceID: String, history: Bool, fromSequence: UInt64?, screenOnResync: Bool = false, includeCheckpoint: Bool = false) -> AttachHistory? {
         lock.lock()
         let session = sessions[surfaceID]
@@ -1210,11 +1454,19 @@ public final class SurfaceRegistry: @unchecked Sendable {
 
     public func applyAgentChanges(_ changes: [String: AgentSnapshot?]) {
         lock.lock()
-        defer { lock.unlock() }
+        var observed: [(String, String?, AgentSnapshot?, Bool)] = []
+        defer {
+            lock.unlock()
+            for (surface, pane, snapshot, persistence) in observed { activity.observe(surfaceID: surface, paneID: pane, snapshot: snapshot, persistence: persistence) }
+        }
+        guard !quiesced else { return }
         // Fire agent-state-changed only on an actual activity transition, so a steady
         // "working" stream of scans doesn't spam the hook.
         var transitioned: [String] = []
         for (surfaceKey, snapshot) in changes {
+            observed.append((surfaceKey, editor.paneLocation(forSurfaceKey: surfaceKey)?.paneID.uuidString, snapshot, resolvedPersistScrollback(forSurfaceKey: surfaceKey)))
+            if let current = activity.currentRun(surfaceID: surfaceKey), current.source.authority > ActivitySource.process.authority,
+               snapshot == nil || (current.pid == snapshot?.pid && current.provider == snapshot?.kind) { continue }
             let before = agentActivityString(forSurfaceKey: surfaceKey)
             editor.setAgent(snapshot, forSurfaceKey: surfaceKey)
             if before != snapshot?.activity.rawValue { transitioned.append(surfaceKey) }
@@ -1264,7 +1516,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
         // refs under the lock, compute each cwd OFF the lock, then re-acquire to commit — and
         // re-validate identity + the current cwd under the lock before each write.
         lock.lock()
-        let snap = Array(sessions)  // [(key, RealPty)] — strong refs keep PTYs alive off-lock
+        let snap = Array(sessions)  // [(key, SessionPty)] — strong refs keep PTYs alive off-lock
         lock.unlock()
         guard !snap.isEmpty else { return }
         let parents = parents ?? ProcessScan.parentMap()
@@ -1272,9 +1524,10 @@ public final class SurfaceRegistry: @unchecked Sendable {
         // Off-lock: walk every surface's process tree without contending with IPC. Keep the
         // exact `session` instance alongside its probed cwd so the re-acquire below can confirm
         // the surface wasn't closed/replaced before committing (PID reuse safety). Capture the PID
-        // the cwd was computed for so a respawn during the probe (same RealPty, new child) can't
+        // the cwd was computed for so a respawn during the probe (same SessionPty, new child) can't
         // commit the OLD child's cwd for the NEW one.
-        let probed: [(key: String, session: RealPty, uuid: UUID, pid: pid_t, cwd: String, command: String?)] = snap.compactMap { key, session in
+        let probed: [(key: String, session: SessionPty, uuid: UUID, pid: pid_t, cwd: String, command: String?)] = snap.compactMap { key, session in
+            guard session.local != nil || (try? session.liveState()) != nil else { return nil }
             guard let uuid = UUID(uuidString: key), let result = session.probeWorkingDirectory(parents: parents) else {
                 return nil
             }
@@ -1291,7 +1544,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
         for entry in probed {
             // The surface could have been closed/replaced while we were off-lock — only commit if
             // the exact instance we probed is still registered under this key, AND its child PID is
-            // still the one we probed. A respawn swaps childPID on the same RealPty instance, so the
+            // still the one we probed. A respawn swaps childPID on the same SessionPty instance, so the
             // `===` check alone would commit a stale cwd; skip and let the next ~1.5s cycle re-probe.
             guard sessions[entry.key] === entry.session,
                   entry.session.currentChildPID == entry.pid,
@@ -1509,7 +1762,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
         return nil
     }
 
-    private func paneQueryJSON(surfaceID: String, kind: String, session: RealPty) -> String {
+    private func paneQueryJSON(surfaceID: String, kind: String, session: SessionPty) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data: Data?
@@ -1550,14 +1803,14 @@ public final class SurfaceRegistry: @unchecked Sendable {
         return data.map { String(decoding: $0, as: UTF8.self) } ?? "{}"
     }
 
-    private struct PwdQuery: Encodable {
+    struct PwdQuery: Encodable {
         var url: String
         var pid: Int
         var name: String
     }
 
     private struct TitleQuery: Encodable { var title: String }
-    private struct SizeQuery: Encodable { var cols: Int; var rows: Int }
+    struct SizeQuery: Encodable { var cols: Int; var rows: Int }
 
     private struct StatusQuery: Encodable {
         struct Row: Encodable {
@@ -1700,7 +1953,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
     }
 
     /// A key reached the focused pane. `done` and `error` have been seen.
-    private func acknowledgeProgramStatusIfCurrentLocked(_ surfaceID: String) {
+    func acknowledgeProgramStatusIfCurrentLocked(_ surfaceID: String) {
         guard let match = editor.tab(forSurfaceKey: surfaceID),
               editor.tabIsCurrent(workspaceID: match.workspaceID, tabID: match.tabID) else { return }
         monitorLock.lock()
@@ -1731,13 +1984,13 @@ public final class SurfaceRegistry: @unchecked Sendable {
 
     /// `harness-cli notify` already told the user. Suppress a second banner from the
     /// OSC 7501 the same hook writes beside it.
-    private func noteProgramStatusNotifiedLocked(_ surfaceID: String) {
+    func noteProgramStatusNotifiedLocked(_ surfaceID: String) {
         monitorLock.lock()
         monitors[surfaceID]?.lastNotifiedAt = Date().timeIntervalSinceReferenceDate
         monitorLock.unlock()
     }
 
-    private func markWaiting(surfaceKey: String, text: String) {
+    func markWaiting(surfaceKey: String, text: String) {
         guard let id = UUID(uuidString: surfaceKey) else { return }
         editor.updatePaneActivity(surfaceID: id) {
             if $0.notification != text { $0.unread = true }
@@ -1745,7 +1998,10 @@ public final class SurfaceRegistry: @unchecked Sendable {
         }
     }
 
+    func persistWorkloadLayout(_ snapshot: SessionSnapshot) throws { try store.saveImmediately(snapshot) }
+
     func commit() {
+        guard !quiesced else { return }
         let revision = editor.snapshot.revision
         // The revision bump + snapshot-changed fan-out stay synchronous under the registry lock
         // (callers depend on the post landing before they return). The disk write does NOT: a
@@ -1763,10 +2019,13 @@ public final class SurfaceRegistry: @unchecked Sendable {
     /// disk, bypassing their debounce windows. Called on graceful daemon shutdown alongside
     /// `flushSnapshot()` so the last mutation in any debounce window is never lost.
     public func flushAllStores() {
+        lock.lock(); let suspended = quiesced; lock.unlock()
+        guard !suspended else { return }
         optionStore.flush()
         environmentStore.flush()
         hookRegistry.flush()
         bufferStore.flush()
+        do { try activity.flush() } catch { reportPersistenceError(error.localizedDescription) }
     }
 
     /// Synchronously persist the current layout snapshot, bypassing the debounce. Called on
@@ -1774,6 +2033,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
     /// mutations isn't lost — the snapshot counterpart of `flushAllScrollback()`.
     public func flushSnapshot() {
         lock.lock()
+        guard !quiesced else { lock.unlock(); return }
         let snapshot = editor.snapshot
         lock.unlock()
         do {
@@ -1781,6 +2041,50 @@ public final class SurfaceRegistry: @unchecked Sendable {
         } catch {
             fputs("HarnessDaemon snapshot flush failed: \(error)\n", harnessStderr)
         }
+    }
+
+    var isQuiesced: Bool { lock.lock(); defer { lock.unlock() }; return quiesced }
+
+    func handover(_ phase: DaemonHandoverPhase, checkpoint: Data?) -> IPCResponse {
+        switch phase {
+        case .prepare:
+            lock.lock(); quiesced = true; lock.unlock()
+            guard hostedMutations.wait(timeout: .now() + 6) == .success else { return .error("Accepted terminal controls have not drained; retain the current daemon and retry handover.") }
+            lock.lock(); let snapshot = editor.snapshot; lock.unlock()
+            stopMonitoring(); AgentScanner.shared.stop(); power.suspend(); schedules.suspend(); aiSummaries.suspend()
+            observationQueue.sync {}; activity.drain(); notifications.suspend()
+            do { try store.saveImmediately(snapshot) }
+            catch { return .error("Cannot checkpoint the layout: \(error.localizedDescription)") }
+            optionStore.flush(); environmentStore.flush(); hookRegistry.flush(); bufferStore.flush()
+            usage.suspend()
+            do { try activity.suspend() }
+            catch { return .error("Cannot checkpoint activity: " + error.localizedDescription) }
+            mutationLease?.suspend()
+            return observationQueue.sync { observationCheckpoint() }
+        case .activate, .resume:
+            guard SessionHostClient.configured == nil || mutationLease != nil else { return .error("This hosted worker has no process mutation lease; activation was refused while programs remain owned by the session host.") }
+            do { try mutationLease?.activate() } catch { return .error("Another active daemon still holds the process mutation lease. Programs are preserved; wait for its retirement before retrying. " + error.localizedDescription) }
+            let failure = observationQueue.sync { () -> String? in
+                let data: Data
+                if let checkpoint { data = checkpoint }
+                else if case let .text(text) = observationCheckpoint() { data = Data(text.utf8) }
+                else { return "Cannot recover the observation checkpoint; programs remain running." }
+                do {
+                    let value = try JSONDecoder().decode(DaemonObservationCheckpoint.self, from: data)
+                    try activity.activate(memoryCheckpoint: value.activity)
+                    try usage.activate()
+                    try notifications.activate()
+                } catch { return "Cannot activate activity history: " + error.localizedDescription }
+                if let error = restoreObservations(data) { return error }
+                monitorLock.lock(); let commands = monitors.values.compactMap(\.lastCommand); monitorLock.unlock()
+                for command in commands { activity.recordCommand(command) }
+                lock.lock(); quiesced = false; lock.unlock()
+                return nil
+            }
+            if let failure { return .error(failure) }
+            startMonitorTimer(); AgentScanner.shared.start(registry: self); power.activate(); schedules.activate(); aiSummaries.activate()
+        }
+        return .ok
     }
 
     /// `freshlyCreated` marks a surface the user just asked for (new tab/session/split/
@@ -1795,8 +2099,14 @@ public final class SurfaceRegistry: @unchecked Sendable {
         scrollbackBytes: Int?,
         freshlyCreated: Bool = false
     ) -> String? {
+        guard !shuttingDown, !surfaceClosures.contains(surfaceID) else { return nil }
+        if let leaf = editor.snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs).flatMap({ $0.rootPane.allLeaves() }).first(where: { $0.surfaceID.uuidString == surfaceID }), !leaf.paneContent.isTerminal { return nil }
         if let session = sessions[surfaceID] {
-            if let scrollbackBytes { session.setScrollbackBytes(scrollbackBytes) }
+            if let scrollbackBytes {
+                hostedMutations.enter(); lock.unlock()
+                session.setScrollbackBytes(scrollbackBytes)
+                lock.lock(); hostedMutations.leave()
+            }
             // Existing surface: do NOT resize here. A surface's geometry is owned by the
             // per-client resize votes (`resizeSurface`), which every client sends once its
             // view (GUI) or TTY (CLI attach) lays out. `ensureSurface` carries only a
@@ -1808,20 +2118,33 @@ public final class SurfaceRegistry: @unchecked Sendable {
             // its real size until the client's own resize vote arrives.
             return surfaceID
         }
+        guard surfaceCreations.insert(surfaceID).inserted else { return nil }
+        let initiallyQuiesced = quiesced
+        let wasInLayout = editor.tab(forSurfaceKey: surfaceID) != nil
+        let candidateShell = shellCandidate(for: shell)
+        let identity = TerminalIdentity.spec(forOption: optionStore.get(TerminalIdentity.optionKey)?.stringValue)
+        let persistScrollback = resolvedPersistScrollback(forSurfaceKey: surfaceID)
+        var spawnEnvironment = extraEnvironment(forSurfaceKey: surfaceID)
+        let injectIntegration = optionStore.get("shell-integration")?.boolValue ?? true
+        hostedMutations.enter()
+        var lockHeld = false
+        lock.unlock()
+        defer {
+            if !lockHeld { lock.lock() }
+            surfaceCreations.remove(surfaceID); hostedMutations.leave()
+        }
         do {
-            let shellPath = Self.resolveShell(shellCandidate(for: shell))
+            let shellPath = Self.resolveShell(candidateShell)
             let workDir = existingWorkingDirectory(cwd)
             // Terminal identity advertised to the child shell (TERM_PROGRAM). Single source: the
             // `terminal-identity` option the GUI/CLI sets; the app reads the same value for its
             // XTVERSION reply.
-            let identity = TerminalIdentity.spec(forOption: optionStore.get(TerminalIdentity.optionKey)?.stringValue)
             // `persist-scrollback off` (pane-scoped — either target spelling — falling back
             // to global): spawn with the scrollback file suspended AND remove any log a
             // previously-persisted run left behind — the opt-out means no scrollback at
             // rest, not just no new writes. The file is attached-but-suspended (not absent)
             // so a later `persist-scrollback on` resumes on-disk persistence for this live
-            // surface — including across a live `respawn-pane` — without RealPty surgery.
-            let persistScrollback = resolvedPersistScrollback(forSurfaceKey: surfaceID)
+            // surface — including across a live `respawn-pane` — without SessionPty surgery.
             let scrollbackURL = HarnessPaths.scrollbackFileURL(forSurfaceID: surfaceID)
             if !persistScrollback {
                 try? FileManager.default.removeItem(at: scrollbackURL)
@@ -1832,9 +2155,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
             // and the plan is ALL-or-nothing: if any of its env keys would lose that merge,
             // a partial apply (e.g. bash `--posix` with the USER's $ENV) would corrupt the
             // spawn — drop the whole plan instead. Best-effort: a nil plan spawns untouched.
-            var spawnEnvironment = extraEnvironment(forSurfaceKey: surfaceID)
             var integrationPlan: ShellIntegrationInjector.Plan? =
-                (optionStore.get("shell-integration")?.boolValue ?? true)
+                injectIntegration
                     ? ShellIntegrationInjector.plan(
                         shellPath: shellPath,
                         baseEnvironment: ProcessInfo.processInfo.environment)
@@ -1846,7 +2168,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
                     integrationPlan = nil
                 }
             }
-            let session = try RealPty(
+            let session = try SessionPty(
                 id: surfaceID,
                 cwd: workDir,
                 shell: shellPath,
@@ -1857,18 +2179,31 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 termProgram: identity.name,
                 termProgramVersion: identity.version,
                 scrollbackURL: scrollbackURL,
-                launchArgumentsOverride: integrationPlan?.argumentsOverride
+                launchArgumentsOverride: integrationPlan?.argumentsOverride,
+                historyProtection: embeddedHistoryProtection
             )
-            if !persistScrollback { session.setScrollbackPersistence(enabled: false) }
+            if !persistScrollback, !initiallyQuiesced { try session.changeScrollbackPersistence(enabled: false) }
+            session.onFailure = { [weak self] message in
+                self?.observationQueue.async { [weak self] in self?.publishObserverFailure(message) }
+            }
+            session.onStreamInterrupted = { [weak self, weak session] in
+                guard let self, let session else { return }
+                self.scheduleObserverRecovery(surfaceKey: surfaceID, session: session)
+            }
             session.onExit = { [weak self, weak session] exitStatus in
                 self?.removeSurfaceIfCurrent(surfaceID: surfaceID, session: session, exitStatus: exitStatus)
             }
             // Internal monitor subscription (Phase 5): cheap output/bell/idle tracking, drained
             // by `processMonitors`. Lives for the surface's lifetime (cleared on teardown).
             // A program-status query is answered here so a pane with no window still replies.
-            _ = session.subscribe(watching: false) { [weak self, weak session] data, _ in
-                guard let reply = self?.noteSurfaceOutput(surfaceKey: surfaceID, data: data) else { return }
-                session?.write(reply)
+            session.monitorSubscription = session.subscribe(watching: false) { [weak self, weak session] data, sequence in
+                self?.observeSurfaceOutput(surfaceKey: surfaceID, data: data, sequence: sequence, session: session)
+            }
+            lock.lock(); lockHeld = true
+            guard !shuttingDown, quiesced == initiallyQuiesced, !wasInLayout || editor.tab(forSurfaceKey: surfaceID) != nil else {
+                lock.unlock(); lockHeld = false
+                if session.createdShell { session.close() }
+                return nil
             }
             sessions[surfaceID] = session
             for wi in editor.snapshot.workspaces.indices {
@@ -1890,7 +2225,11 @@ public final class SurfaceRegistry: @unchecked Sendable {
             // `removeSurfaceIfCurrent` instead of firing into a nil handler and leaking.
             // Stamp the session before the first byte so a status event can name it.
             rememberMonitorIdentity(surfaceID: surfaceID)
-            session.start()
+            if !quiesced {
+                lock.unlock(); lockHeld = false
+                try session.startSafely()
+                lock.lock(); lockHeld = true
+            }
             return surfaceID
         } catch {
             fputs("HarnessDaemon surface launch failed for \(surfaceID): \(error)\n", harnessStderr)
@@ -1947,7 +2286,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
 
     func sessionForTesting(surfaceID: String) -> RealPty? {
         lock.lock(); defer { lock.unlock() }
-        return sessions[surfaceID]
+        return sessions[surfaceID]?.local
     }
 
     /// Only called for a tab the user just created (`newTab`/`newTabInWorkspace`), so the
@@ -1977,7 +2316,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
         else { return }
         for tab in session.tabs {
             // Each pane reopens in its own directory; the tab's cwd is only its focused pane's.
-            for leaf in tab.rootPane.allLeaves() {
+            for leaf in tab.rootPane.allLeaves() where leaf.paneContent.isTerminal {
                 _ = createOrEnsureSurface(
                     surfaceID: leaf.surfaceID.uuidString,
                     cwd: leaf.cwd ?? tab.cwd,
@@ -1994,7 +2333,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
     private func ensureAllSnapshotSurfaces() {
         for tab in editor.snapshot.workspaces.flatMap({ workspace in workspace.sessions.flatMap { $0.tabs } }) {
             // Each pane reopens in its own directory; the tab's cwd is only its focused pane's.
-            for leaf in tab.rootPane.allLeaves() {
+            for leaf in tab.rootPane.allLeaves() where leaf.paneContent.isTerminal {
                 _ = createOrEnsureSurface(
                     surfaceID: leaf.surfaceID.uuidString,
                     cwd: leaf.cwd ?? tab.cwd,
@@ -2012,120 +2351,99 @@ public final class SurfaceRegistry: @unchecked Sendable {
     /// tabs/sessions, so a surface lives until its last referencing tab is gone.
     /// Called after the editor mutation, so `editor.snapshot` reflects survivors.
     private func closeSurfaces(_ surfaceIDs: [String]) {
-        let stillReferenced = Set(
-            editor.snapshot.workspaces
-                .flatMap { $0.sessions }
-                .flatMap { $0.tabs }
-                .flatMap { $0.rootPane.allSurfaceIDs().map(\.uuidString) }
-        )
+        let stillReferenced = Set(editor.snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs).flatMap { $0.rootPane.allSurfaceIDs().map(\.uuidString) })
+        var closing: [(id: String, session: SessionPty?, pipe: TerminalOutputPipe?)] = []
         for surfaceID in surfaceIDs where !stillReferenced.contains(surfaceID) {
-            let removed = sessions.removeValue(forKey: surfaceID)
-            // The surface is gone from the layout — synchronously drop its persisted scrollback
-            // before closing, so no late debounced flush can resurrect the file.
-            removed?.deletePersistedScrollback()
-            removed?.close()
-            // Backstop: when a shell exits naturally (remain-on-exit off), `removeSurfaceIfCurrent`
-            // already reaped the RealPty, so `removed` is nil here and the line above is a no-op —
-            // remove the file by path so it doesn't linger until the next restart's orphan sweep.
-            // The RealPty (and its ScrollbackFile) is gone in that case, so this can't be resurrected.
-            let scrollbackURL = HarnessPaths.scrollbackFileURL(forSurfaceID: surfaceID)
-            try? FileManager.default.removeItem(at: scrollbackURL)
-            try? FileManager.default.removeItem(at: scrollbackURL.appendingPathExtension("sizes"))
-            stopPipe(surfaceID: surfaceID)
-            // Drop the output monitor too, else it leaks across tab/session/pane churn.
+            guard surfaceClosures.insert(surfaceID).inserted else { continue }
+            closing.append((surfaceID, sessions.removeValue(forKey: surfaceID), pipes.removeValue(forKey: surfaceID)))
             monitorLock.lock(); monitors.removeValue(forKey: surfaceID); monitorLock.unlock()
-            // GC the surface's pane-scoped options (OSC 1337 user variables, per-pane
-            // overrides): the surface key is gone for good, so they would otherwise sit
-            // in options.json forever — unbounded growth under name churn.
             optionStore.removeAll(scope: .pane, target: surfaceID)
         }
+        // Layout ownership and accepted-work reservations are established above.
+        // Closing remote PTYs, descriptors and pipe consumers cannot hold the
+        // registry lock or delay independent pane queries through it.
+        lock.unlock()
+        for entry in closing {
+            if let pipe = entry.pipe {
+                if let token = pipe.token { entry.session?.cancelSubscription(token: token) }
+                pipe.stop()
+            }
+            if SessionHostClient.configured == nil { entry.session?.deletePersistedScrollback() }
+            entry.session?.close()
+            if SessionHostClient.configured == nil {
+                let url = HarnessPaths.scrollbackFileURL(forSurfaceID: entry.id)
+                try? FileManager.default.removeItem(at: url)
+                try? FileManager.default.removeItem(at: url.appendingPathExtension("sizes"))
+            }
+        }
+        lock.lock()
+        for entry in closing { surfaceClosures.remove(entry.id) }
     }
 
     // MARK: pipe-pane
 
-    /// Active `pipe-pane` taps: a surface's live output is tee'd to a spawned
-    /// shell command's stdin until toggled off (or the surface closes).
-    /// @unchecked Sendable: `backlog` is guarded by `backlogLock`; `token` is only assigned under
-    /// the registry `lock` (in `startPipe`, before the process can fire `terminationHandler`); the
-    /// rest are immutable.
-    private final class PanePipe: @unchecked Sendable {
-        let process: Process
-        let stdin: FileHandle
-        var token: UUID?
-        /// Tee writes run here so a stalled consumer (full pipe buffer ⇒ blocking write) can't
-        /// stall the surface's shared `deliveryQueue` and starve the GUI/attach subscribers.
-        private let writerQueue = DispatchQueue(label: "com.robert.harness.pipe-pane.write")
-        private let backlogLock = NSLock()
-        private var backlog = 0
-        private let maxBacklog = 4 * 1024 * 1024
+    private var pipes: [String: TerminalOutputPipe] = [:]
+    private var pipeChanges: Set<String> = []
 
-        init(process: Process, stdin: FileHandle) {
-            self.process = process
-            self.stdin = stdin
-        }
-
-        /// Tee `data` to the piped command, bounded: past the backlog cap we drop — a tee is
-        /// best-effort and must never accumulate without limit behind a stuck consumer.
-        func feed(_ data: Data) {
-            backlogLock.lock()
-            if backlog + data.count > maxBacklog { backlogLock.unlock(); return }
-            backlog += data.count
-            backlogLock.unlock()
-            let stdin = self.stdin
-            let count = data.count
-            writerQueue.async { [weak self] in
-                _ = try? stdin.write(contentsOf: data) // broken pipe (consumer exited) just drops
-                guard let self else { return }
-                self.backlogLock.lock(); self.backlog -= count; self.backlogLock.unlock()
+    /// Enter and return with the registry lock, but spawn, subscribe and teardown
+    /// outside it. Revalidate ownership before publishing the consumer.
+    private func startPipe(surfaceID: String, shellCommand: String) -> String? {
+        guard !pipeChanges.contains(surfaceID), !surfaceClosures.contains(surfaceID), let session = sessions[surfaceID] else { return "The pane or its pipe is changing; retry after it finishes." }
+        pipeChanges.insert(surfaceID)
+        let previous = pipes.removeValue(forKey: surfaceID)
+        lock.unlock()
+        if let previous { if let token = previous.token { session.cancelSubscription(token: token) }; previous.stop() }
+        var launched: TerminalOutputPipe?, failure: String?
+        do {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0]); process.arguments = ["--terminal-pipe-worker", shellCommand]
+            let input = Pipe(); process.standardInput = input
+            process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+            process.environment = ProcessInfo.processInfo.environment
+            let pipe = try TerminalOutputPipe(process: process, stdin: input.fileHandleForWriting)
+            process.terminationHandler = { [weak self, weak pipe, weak session] _ in
+                guard let self, let pipe else { return }
+                self.lock.lock()
+                if self.pipes[surfaceID] === pipe { self.pipes.removeValue(forKey: surfaceID) }
+                self.lock.unlock()
+                if let token = pipe.token { session?.cancelSubscription(token: token) }
+                pipe.stop()
+            }
+            try process.run(); pipe.didStart()
+            pipe.token = session.subscribe(watching: false) { [weak self, weak pipe] data, _ in
+                guard let pipe, !pipe.feed(data), pipe.claimFailure() else { return }
+                // Overload stops this tee instead of silently dropping part of a stream.
+                DispatchQueue.global(qos: .utility).async { [weak self, pipe] in
+                    guard let self else { pipe.stop(); return }
+                    self.lock.lock()
+                    if self.pipes[surfaceID] === pipe { self.stopPipe(surfaceID: surfaceID) }
+                    self.lock.unlock()
+                }
+            }
+            launched = pipe
+        } catch { failure = "The pipe consumer could not be launched; its command was not logged." }
+        lock.lock()
+        pipeChanges.remove(surfaceID)
+        if let launched {
+            if sessions[surfaceID] === session, !surfaceClosures.contains(surfaceID), !quiesced, launched.process.isRunning {
+                pipes[surfaceID] = launched
+            } else {
+                lock.unlock()
+                if let token = launched.token { session.cancelSubscription(token: token) }
+                launched.stop(); lock.lock()
+                failure = "The pipe consumer exited or the pane changed during launch."
             }
         }
-    }
-    private var pipes: [String: PanePipe] = [:]
-
-    /// Caller holds `lock` (invoked from `handle`/`closeSurfaces`), so this talks to
-    /// the `RealPty` directly rather than the locking `subscribe` wrappers.
-    private func startPipe(surfaceID: String, shellCommand: String) {
-        stopPipe(surfaceID: surfaceID)   // one pipe per surface
-        guard let session = sessions[surfaceID] else { return }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        process.arguments = ["-c", shellCommand]
-        let stdinPipe = Pipe()
-        process.standardInput = stdinPipe
-        process.environment = ProcessInfo.processInfo.environment
-        let pipe = PanePipe(process: process, stdin: stdinPipe.fileHandleForWriting)
-        // Subscribe + register BEFORE run() so the token is set before a fast-exiting command can
-        // fire `terminationHandler` (which must cancel exactly this token, never the global set).
-        let token = session.subscribe(watching: false) { [weak pipe] data, _ in pipe?.feed(data) }
-        pipe.token = token
-        pipes[surfaceID] = pipe
-        // Auto-tear-down when the piped command exits on its own (e.g. `head -1`); otherwise the
-        // subscriber + map entry leak until the surface closes. Scoped by object identity + token
-        // so it never wipes a replacement pipe or every subscriber. Runs off-lock on a background
-        // queue, so it takes the registry lock itself.
-        process.terminationHandler = { [weak self] _ in
-            guard let self else { return }
-            self.lock.lock()
-            if let existing = self.pipes[surfaceID], existing === pipe {
-                if let token = existing.token { self.sessions[surfaceID]?.cancelSubscription(token: token) }
-                try? existing.stdin.close()
-                self.pipes.removeValue(forKey: surfaceID)
-            }
-            self.lock.unlock()
-        }
-        if (try? process.run()) == nil {
-            // Never log the command itself — a pipe target can carry tokens/paths the user
-            // would not want in daemon stderr. The surface id is enough to diagnose.
-            fputs("HarnessDaemon: pipe-pane failed to launch for surface \(surfaceID)\n", harnessStderr)
-            stopPipe(surfaceID: surfaceID)
-        }
+        return failure
     }
 
     private func stopPipe(surfaceID: String) {
         guard let pipe = pipes.removeValue(forKey: surfaceID) else { return }
-        if let token = pipe.token { sessions[surfaceID]?.cancelSubscription(token: token) }
-        try? pipe.stdin.close()
-        if pipe.process.isRunning { pipe.process.terminate() }
+        let session = sessions[surfaceID]
+        lock.unlock()
+        if let token = pipe.token { session?.cancelSubscription(token: token) }
+        pipe.stop()
+        lock.lock()
     }
 
     /// Whether OSC/program title auto-rename is enabled for the tab owning
@@ -2138,7 +2456,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
     /// The extra environment a pane's shell receives: Harness-owned vars (so
     /// nested tools detect Harness, the `$TMUX` analog) plus the resolved
     /// `set-environment` map for the surface's owning session.
-    private func extraEnvironment(forSurfaceKey surfaceKey: String) -> [String: String] {
+    func extraEnvironment(forSurfaceKey surfaceKey: String) -> [String: String] {
         let socket = HarnessPaths.socketURL.path
         var env: [String: String] = [
             "HARNESS": socket,
@@ -2194,13 +2512,14 @@ public final class SurfaceRegistry: @unchecked Sendable {
     }
 
     /// Record which session and tab own a surface before its first output byte.
-    private func rememberMonitorIdentity(surfaceID: String) {
+    func rememberMonitorIdentity(surfaceID: String) {
         let session = sessionID(forSurfaceKey: surfaceID)
         let tab = editor.tab(forSurfaceKey: surfaceID)?.tabID.uuidString
         let owner = sessions[surfaceID]?.probeForegroundProcess()
         monitorLock.lock()
         var monitor = monitors[surfaceID] ?? SurfaceMonitor()
         monitor.sessionID = session
+        monitor.streamIdentity = sessions[surfaceID]?.streamIdentity
         monitor.tabID = tab
         if let owner {
             monitor.ownerPID = Int(owner.pid)
@@ -2262,7 +2581,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
     /// Runs in `init` after `ensureAllSnapshotSurfaces`.
     ///
     /// Liveness is the union of live PTYs AND snapshot-referenced surfaces — NOT just `sessions`.
-    /// `createOrEnsureSurface` returns nil when the `RealPty` fails to spawn (forkpty EAGAIN/ENOMEM),
+    /// `createOrEnsureSurface` returns nil when the `SessionPty` fails to spawn (forkpty EAGAIN/ENOMEM),
     /// leaving the surface in `layout.json` but out of `sessions`; keying the sweep on `sessions`
     /// alone would then permanently delete the history of a surface that respawns fine next boot.
     private func cleanupOrphanScrollbackFiles() {
@@ -2286,6 +2605,13 @@ public final class SurfaceRegistry: @unchecked Sendable {
     /// PTYs (`sessions`) AND every surface referenced by the snapshot. The snapshot half is what
     /// keeps a failed-to-spawn surface's history (in `layout.json` but absent from `sessions`)
     /// from being swept. `internal` purely so the orphan-sweep safety can be unit-tested.
+    func surfaceSize(_ id: String) -> (rows: UInt16, cols: UInt16)? {
+        lock.lock(); let target = sessions[id]; lock.unlock()
+        guard let target else { return nil }
+        if let local = target.local, let size = local.currentSize() { return (UInt16(size.rows), UInt16(size.cols)) }
+        guard let state = try? target.liveState(), let rows = state.rows, let cols = state.cols else { return nil }
+        return (UInt16(rows), UInt16(cols))
+    }
     func scrollbackLiveSurfaceKeys() -> Set<String> {
         let referenced = Set(editor.snapshot.workspaces
             .flatMap { $0.sessions }.flatMap { $0.tabs }
@@ -2293,9 +2619,10 @@ public final class SurfaceRegistry: @unchecked Sendable {
         return Set(sessions.keys).union(referenced)
     }
 
-    private func removeSurfaceIfCurrent(surfaceID: String, session: RealPty?, exitStatus: Int32? = nil) {
+    func removeSurfaceIfCurrent(surfaceID: String, session: SessionPty?, exitStatus: Int32? = nil) {
         lock.lock()
         guard let session, sessions[surfaceID] === session else { lock.unlock(); return }
+        AgentDetector.unregisterRootPID(forSurfaceKey: surfaceID)
         sessions.removeValue(forKey: surfaceID)
         monitorLock.lock()
         var exitedBook = monitors[surfaceID]?.programStatus ?? ProgramStatusBook()
@@ -2319,7 +2646,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
         // (or the whole tab when it was the pane's last). The close reuses the normal IPC
         // handlers, so it must run off the registry lock — resolve the target here, dispatch
         // there.
-        let keep = optionStore.get("remain-on-exit")?.boolValue ?? true
+        let keep = editor.snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs).flatMap { $0.rootPane.allLeaves() }.contains { $0.surfaceID.uuidString == surfaceID && $0.workloadID != nil } || (optionStore.get("remain-on-exit")?.boolValue ?? true)
         if keep {
             // The retained dead pane must not keep live-looking metadata: the detector was just
             // unregistered, so no later scanner pass can emit a nil change for this surface —

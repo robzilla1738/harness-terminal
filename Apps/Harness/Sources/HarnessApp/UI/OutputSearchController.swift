@@ -2,17 +2,22 @@ import AppKit
 import HarnessCore
 
 @MainActor
-final class OutputSearchController: NSWindowController, NSSearchFieldDelegate, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate {
+final class OutputSearchController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate {
     static let shared = OutputSearchController()
-    private let queryField = NSSearchField()
-    private let scope = NSPopUpButton()
-    private let matchCase = NSButton(checkboxWithTitle: "Match case", target: nil, action: nil)
+    private let queryField = HarnessSearchField()
+    private let scope = HarnessSelect()
+    private let regularExpression = HarnessToggle(title: "Regex")
+    private let agentFilter = HarnessSelect()
+    private let timeFilter = HarnessSelect()
+    private var searchedFilter: OutputSearchFilter?
+    private let workers: OperationQueue = { let queue = OperationQueue(); queue.name = "com.harness.output-search"; queue.maxConcurrentOperationCount = 4; return queue }()
+    private let matchCase = HarnessToggle(title: "Match case")
     private let table = NSTableView()
     private let status = NSTextField(wrappingLabelWithString: "Search retained output in open sessions. Closed output is not archived.")
-    private let openButton = NSButton(title: "Open Pane", target: nil, action: nil)
-    private let moreButton = NSButton(title: "Load More", target: nil, action: nil)
+    private let openButton = HarnessToolPage.button("Open Pane", target: nil, action: nil)
+    private let moreButton = HarnessToolPage.button("Load More", target: nil, action: nil)
     private var results: [(owner: String, match: OutputSearchMatch, epoch: String, revision: Int)] = []
-    private var pending: [(id: UUID, endpoint: Endpoint)] = []
+    private var pending: [(id: UUID, endpoint: Endpoint, operation: BlockOperation)] = []
     private var nextOffsets: [String: Int] = [:]
     private var searchGenerations: [String: String] = [:]
     private var errors: [String] = []
@@ -26,17 +31,24 @@ final class OutputSearchController: NSWindowController, NSSearchFieldDelegate, N
     private var openingResult = false
 
     private init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 520), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 640), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "Search All Sessions"
         window.isReleasedWhenClosed = false
         window.contentMinSize = NSSize(width: 600, height: 520)
         super.init(window: window)
         window.delegate = self
         queryField.placeholderString = "Search terminal output"
-        queryField.delegate = self
+        queryField.onChange = { [weak self] _ in self?.searchChanged() }; queryField.setAccessibilityLabel("Search terminal output")
+        scope.setAccessibilityLabel("Search scope")
         scope.addItems(withTitles: ["All Hosts", "This Host", "This Session"])
         scope.target = self; scope.action = #selector(searchChanged)
         matchCase.target = self; matchCase.action = #selector(searchChanged)
+        regularExpression.target = self; regularExpression.action = #selector(searchChanged)
+        agentFilter.addItems(withTitles: ["Any recorded agent"] + AgentKind.allCases.map(\.displayName))
+        timeFilter.addItems(withTitles: ["Any execution time", "Executions overlapping last hour", "Executions overlapping last 24 hours", "Executions overlapping last 7 days"])
+        for filter in [agentFilter, timeFilter] { filter.target = self; filter.action = #selector(searchChanged) }
+        agentFilter.setAccessibilityLabel("Filter by recorded provider"); timeFilter.setAccessibilityLabel("Filter execution overlap time; terminal lines do not have exact timestamps")
+        regularExpression.setAccessibilityLabel("Use isolated regular expression matching")
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("result"))
         column.width = 660
         column.resizingMask = .autoresizingMask
@@ -50,8 +62,8 @@ final class OutputSearchController: NSWindowController, NSSearchFieldDelegate, N
         scroll.borderType = .bezelBorder
         moreButton.target = self; moreButton.action = #selector(loadMore); moreButton.isEnabled = false
         openButton.target = self; openButton.action = #selector(openResult); openButton.isEnabled = false
-        let root = NSStackView(views: [queryField, NSStackView(views: [scope, matchCase]), scroll, status, NSStackView(views: [moreButton, openButton])])
-        root.orientation = .vertical; root.alignment = .width; root.spacing = 12
+        let root = NSStackView(views: [queryField, NSStackView(views: [scope, matchCase, regularExpression]), NSStackView(views: [agentFilter, timeFilter]), scroll, status, NSStackView(views: [moreButton, openButton])])
+        root.orientation = .vertical; root.alignment = .leading; root.spacing = 12
         root.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
         root.translatesAutoresizingMaskIntoConstraints = false
         status.textColor = .secondaryLabelColor
@@ -61,6 +73,8 @@ final class OutputSearchController: NSWindowController, NSSearchFieldDelegate, N
         if let content = window.contentView {
             NSLayoutConstraint.activate([root.topAnchor.constraint(equalTo: content.topAnchor), root.bottomAnchor.constraint(equalTo: content.bottomAnchor), root.leadingAnchor.constraint(equalTo: content.leadingAnchor), root.trailingAnchor.constraint(equalTo: content.trailingAnchor)])
         }
+        for view in root.arrangedSubviews { view.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -36).isActive = true }
+        HarnessToolPage.install(in: window, title: "Search all sessions", subtitle: "Find retained output across your connected hosts.", symbol: "magnifyingglass", content: root)
         window.center()
     }
     @available(*, unavailable)
@@ -79,6 +93,7 @@ final class OutputSearchController: NSWindowController, NSSearchFieldDelegate, N
         openingResult = false
         openButton.isEnabled = false
         for search in pending {
+            search.operation.cancel()
             DispatchQueue.global(qos: .utility).async {
                 do { _ = try DaemonClient(endpoint: search.endpoint).request(.cancelSearch(id: search.id)) }
                 catch { fputs("Harness search cancellation failed: \(error)\n", harnessStderr) }
@@ -97,6 +112,10 @@ final class OutputSearchController: NSWindowController, NSSearchFieldDelegate, N
     private func startSearch() {
         searchedQuery = queryField.stringValue
         searchedCase = matchCase.state == .on
+        let agentIndex = agentFilter.indexOfSelectedItem - 1
+        let agent = AgentKind.allCases.indices.contains(agentIndex) ? AgentKind.allCases[agentIndex] : nil
+        let hours: Double? = [1: 1.0, 2: 24.0, 3: 168.0][timeFilter.indexOfSelectedItem]
+        searchedFilter = regularExpression.state == .on || agent != nil || hours != nil ? OutputSearchFilter(regex: regularExpression.state == .on, agent: agent, from: hours.map { Date().addingTimeInterval(-$0 * 3600) }, to: hours == nil ? nil : .now) : nil
         guard !searchedQuery.isEmpty else { status.stringValue = "Search retained output in open sessions."; return }
         let owners = scope.indexOfSelectedItem == 0 ? SessionCoordinator.shared.connectedOwners : [sourceOwner]
         request(owners.map { ($0, 0) })
@@ -110,8 +129,8 @@ final class OutputSearchController: NSWindowController, NSSearchFieldDelegate, N
             status.stringValue = "No connected hosts to search. Connect a host and try again."
             return
         }
-        status.stringValue = "Searching…"
-        let query = searchedQuery, sensitive = searchedCase
+        status.stringValue = "Searching… Agent/time filters select recorded executions; output lines have no exact timestamps. Regex runs in an isolated worker with a time limit."
+        let query = searchedQuery, sensitive = searchedCase, filter = searchedFilter
         let session = scope.indexOfSelectedItem == 2 ? sourceSession : nil
         for (owner, offset) in targets {
             guard let endpoint = SessionCoordinator.shared.endpoint(forOwner: owner) else {
@@ -120,10 +139,18 @@ final class OutputSearchController: NSWindowController, NSSearchFieldDelegate, N
             }
             let id = UUID()
             let searchGeneration = searchGenerations[owner]
-            pending.append((id, endpoint))
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let operation = BlockOperation()
+            pending.append((id, endpoint, operation))
+            operation.addExecutionBlock { [weak self, weak operation] in
+                guard let operation, !operation.isCancelled else { return }
                 let result = Result<OutputSearchPage, Error> {
-                    let response = try DaemonClient(endpoint: endpoint).request(.searchOutput(id: id, query: query, caseSensitive: sensitive, sessionID: session, offset: offset, generation: searchGeneration), timeout: 20)
+                    let client = DaemonClient(endpoint: endpoint)
+                    let request: IPCRequest
+                    if let filter {
+                        guard case let .daemonStats(stats) = try client.request(.daemonStats, timeout: 1), stats.supports(DaemonStats.filteredOutputSearch) else { throw SetupError.invalid("This host needs a newer daemon for regex and execution filters. Existing shells remain running during daemon replacement.") }
+                        request = .searchOutputFiltered(id: id, query: query, caseSensitive: sensitive, sessionID: session, offset: offset, generation: searchGeneration, filter: filter)
+                    } else { request = .searchOutput(id: id, query: query, caseSensitive: sensitive, sessionID: session, offset: offset, generation: searchGeneration) }
+                    let response = try client.request(request, timeout: 15)
                     if case let .error(message) = response { throw SetupError.invalid(message == "unrecognized request" ? "Update this host's daemon to search its output." : message) }
                     guard case let .text(json) = response else { throw SetupError.invalid("No search results returned") }
                     return try JSONDecoder().decode(OutputSearchPage.self, from: Data(json.utf8))
@@ -133,6 +160,7 @@ final class OutputSearchController: NSWindowController, NSSearchFieldDelegate, N
                     self?.receive(result, owner: owner, offset: offset, generation: token)
                 }
             }
+            workers.addOperation(operation)
         }
     }
     private func receive(_ result: Result<OutputSearchPage, Error>, owner: String, offset: Int, generation token: Int) {
@@ -169,13 +197,15 @@ final class OutputSearchController: NSWindowController, NSSearchFieldDelegate, N
         guard !openingResult, results.indices.contains(table.selectedRow) else { return }
         let item = results[table.selectedRow]
         guard let endpoint = SessionCoordinator.shared.endpoint(forOwner: item.owner) else { return }
-        let token = generation, query = searchedQuery, sensitive = searchedCase
+        let token = generation, query = searchedQuery, sensitive = searchedCase, regex = searchedFilter?.regex == true
         let id = UUID()
-        pending.append((id, endpoint))
+        let operation = BlockOperation()
+        pending.append((id, endpoint, operation))
         openingResult = true
         openButton.isEnabled = false
         status.stringValue = "Checking result…"
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        operation.addExecutionBlock { [weak self, weak operation] in
+            guard let operation, !operation.isCancelled else { return }
             let result = Result {
                 let response = try DaemonClient(endpoint: endpoint).request(.validateOutputMatch(id: id, match: item.match, epoch: item.epoch, revision: item.revision), timeout: 10)
                 guard case .ok = response else {
@@ -190,13 +220,17 @@ final class OutputSearchController: NSWindowController, NSSearchFieldDelegate, N
                 openButton.isEnabled = results.indices.contains(table.selectedRow)
                 do {
                     try result.get()
-                    if SessionCoordinator.shared.openSearchResult(item.match, owner: item.owner, query: query, caseSensitive: sensitive) {
+                    if SessionCoordinator.shared.openSearchResult(item.match, owner: item.owner, query: query, caseSensitive: sensitive, regex: regex) {
                         cancel()
                         window?.orderOut(nil)
-                    } else { status.stringValue = "This output moved, expired, or is still loading. Search again to refresh its location." }
+                    } else {
+                        status.stringValue = "This output moved, expired, or is still loading. Search again to refresh its location."
+                        window?.makeKeyAndOrderFront(nil)
+                    }
                 } catch { status.stringValue = error.localizedDescription }
             }
         }
+        workers.addOperation(operation)
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {

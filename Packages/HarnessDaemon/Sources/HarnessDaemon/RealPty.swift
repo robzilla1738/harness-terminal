@@ -85,13 +85,37 @@ public final class RealPty: @unchecked Sendable {
     /// SIGTERM'd during a respawn) bails out instead of tearing down — or firing
     /// `onExit` for — the child that replaced it. The previous code let the old
     /// exit-watcher's `close()` kill the freshly respawned shell.
+    let streamIdentity = UUID().uuidString
     private var generation: UInt64 = 0
-    /// Exit status the exit watcher reaped, tagged with its child's generation. When the EOF
-    /// path wins the `isClosed` race it usually arrives without a status — it reads this record
-    /// (with a bounded poll + its own WNOHANG attempt) to still deliver a real status to
-    /// `onExit`. Either side may win the reap; the kernel hands the status to exactly one
-    /// `waitpid`, and both record/lookup through here. Guarded by `lifecycleLock`.
+    private let inputPolicyLock = NSLock()
+    private var lastInputGeneration: UInt64?
+    private var promptGeneration: UInt64?
+    private var pasteGeneration: UInt64?
+    // This scanner is owned by deliveryQueue, away from PTY reads and input.
+    private var resumeScanner = PtyStreamScanner()
+    private var resumeScanGeneration: UInt64?
+    /// Reaped status tagged with its child generation. Terminal EOF does not reap
+    /// or end a process. Guarded by lifecycleLock, including respawn races.
     private var reapedExit: (generation: UInt64, status: Int32?)?
+    private final class OwnedChild: @unchecked Sendable {
+        let pid: pid_t
+        let identity: String?
+        private let lock = NSLock()
+        private var reaped = false
+        init(pid: pid_t) { self.pid = pid; identity = ProcessScan.generation(pid) }
+        var isReaped: Bool { lock.lock(); defer { lock.unlock() }; return reaped }
+        func markReaped() { lock.lock(); reaped = true; lock.unlock() }
+        func escalate() {
+            guard !isReaped, let identity, ProcessScan.generation(pid) == identity else { return }
+            _ = kill(pid, SIGKILL)
+        }
+    }
+    private var ownedChildren: [UInt64: OwnedChild] = [:]
+    private var watchedGenerations: Set<UInt64> = []
+    var ownedChildCount: Int {
+        lifecycleLock.lock(); let children = Array(ownedChildren.values); lifecycleLock.unlock()
+        return children.filter { !$0.isReaped }.count
+    }
     /// Generations whose `waitpid` watcher has already returned (i.e. that child has been reaped
     /// and its PID may now be recycled to an unrelated process). `reapedExit` is a SINGLE slot
     /// overwritten on every reap, so it can't answer "was generation N reaped?" once a later
@@ -122,8 +146,6 @@ public final class RealPty: @unchecked Sendable {
     /// was the largest single per-segment cost. Reusing one buffer raised end-to-end drain from
     /// ≈42 to ≈48 MB/s in the `real_pty_end_to_end_drain` benchmark (the raw read ceiling is ≈75).
     private var readBuffer = [UInt8](repeating: 0, count: 64 * 1024)
-    /// `readQueue`-confined throttle for `AgentDetector.recordActivity` (see `handleOutput`).
-    private var lastActivityRecordUptime: UInt64 = 0
     /// Subscriber fan-out runs here, NOT on `readQueue`: a slow or misbehaving subscriber handler
     /// must not stall PTY reads (which would back-pressure the shell and every other subscriber of
     /// this surface). Output is enqueued in read order onto this *serial* queue, so each subscriber
@@ -143,7 +165,9 @@ public final class RealPty: @unchecked Sendable {
         defer { lifecycleLock.unlock() }
         guard master >= 0 else { return nil }
         let fd = sysDup(master)
-        return fd >= 0 ? (fd, generation) : nil
+        guard fd >= 0 else { return nil }
+        guard fcntl(fd, F_SETFD, FD_CLOEXEC) == 0 else { sysClose(fd); return nil }
+        return (fd, generation)
     }
     /// Delayed-SIGKILL escalation timers (`scheduleKillEscalation`) run here, off every
     /// hot path. A child that ignores SIGTERM+SIGHUP would otherwise leave the `watchForExit`
@@ -159,7 +183,11 @@ public final class RealPty: @unchecked Sendable {
     /// status when the `waitpid` watcher observed it (exit code, or 128+signal for a signalled
     /// child, shell-convention); nil when only EOF was observed (e.g. the read loop won the
     /// race, or a failed respawn tears the surface down with no child to reap).
+    private var pendingExitDelivery: (generation: UInt64, status: Int32?)?
     public var onExit: ((_ exitStatus: Int32?) -> Void)?
+    /// Actual waitpid result for a specific owned generation, including children
+    /// retiring after explicit close. Terminal EOF and close acceptance never fire it.
+    var onReaped: (@Sendable (UInt64, Int32?) -> Void)?
 
     /// Append-only ring buffer of terminal output bytes. Indexed by sequence
     /// number so reattaching clients can request "give me everything since N".
@@ -167,7 +195,7 @@ public final class RealPty: @unchecked Sendable {
         let sequence: UInt64
         let data: Data
     }
-    struct ScrollbackReplaySegment: Sendable, Equatable {
+    struct ScrollbackReplaySegment: Sendable, Equatable, Codable {
         let sequence: UInt64
         let data: Data
 
@@ -223,6 +251,7 @@ public final class RealPty: @unchecked Sendable {
     /// Subscribers receive raw output. Multiple subscribers can attach (the
     /// running app + any number of `harness-cli attach` clients).
     private var subscribers: [UUID: (Data, UInt64) -> Void] = [:]
+    private var geometrySubscribers: [UUID: (ReplaySize) -> Void] = [:]
     /// The subscribers that paint the pane (clients), as opposed to taps like the monitor.
     private var watchers: Set<UUID> = []
     private let subscribersLock = NSLock()
@@ -282,8 +311,10 @@ public final class RealPty: @unchecked Sendable {
     /// injection: bash swaps `-l` for `--posix`). Reused verbatim on respawn — a respawned
     /// shell keeps the injection decision its surface was created with.
     private let launchArgumentsOverride: [String]?
+    private(set) var usesPreparedStandardInput = false
+    private var launchInputWriter: PtyInputWriter?
 
-    public init(
+    public convenience init(
         id: DaemonSurfaceID,
         cwd: String,
         shell: String,
@@ -294,10 +325,36 @@ public final class RealPty: @unchecked Sendable {
         termProgram: String = "",
         termProgramVersion: String = "",
         scrollbackURL: URL? = nil,
-        launchArgumentsOverride: [String]? = nil
+        launchArgumentsOverride: [String]? = nil,
+        initialStandardInput: Data? = nil,
+        historyProtection: HistoryProtection? = nil
+    ) throws {
+        try self.init(id: id, cwd: cwd, shell: shell, rows: rows, cols: cols,
+            scrollbackBytes: scrollbackBytes, extraEnvironment: extraEnvironment,
+            termProgram: termProgram, termProgramVersion: termProgramVersion,
+            scrollbackURL: scrollbackURL, launchArgumentsOverride: launchArgumentsOverride,
+            initialStandardInput: initialStandardInput, historyProtection: historyProtection, retainedHistory: nil)
+    }
+    init(
+        id: DaemonSurfaceID,
+        cwd: String,
+        shell: String,
+        rows: UInt16 = 24,
+        cols: UInt16 = 80,
+        scrollbackBytes: Int = 1024 * 1024,
+        extraEnvironment: [String: String] = [:],
+        termProgram: String = "",
+        termProgramVersion: String = "",
+        scrollbackURL: URL? = nil,
+        launchArgumentsOverride: [String]? = nil,
+        initialStandardInput: Data? = nil,
+        historyProtection: HistoryProtection? = nil,
+        retainedHistory: ScrollbackFile?
     ) throws {
         self.id = id
         self.launchArgumentsOverride = launchArgumentsOverride
+        usesPreparedStandardInput = initialStandardInput != nil
+        guard initialStandardInput.map({ $0.count <= 32 << 10 }) ?? true else { throw PtyError.launchFailed }
         self.termProgram = termProgram
         self.termProgramVersion = termProgramVersion
         // `scrollbackBytes == 0` requests unlimited scrollback. Bound the daemon's in-memory replay
@@ -321,11 +378,11 @@ public final class RealPty: @unchecked Sendable {
         // new output simply continues after it. Chunked (not one giant entry) so the ring's
         // per-entry eviction stays granular as new output pushes the oldest history out.
         if let scrollbackURL {
-            self.scrollbackFile = ScrollbackFile(url: scrollbackURL, retentionCap: maxScrollbackBytes)
+            self.scrollbackFile = retainedHistory ?? ScrollbackFile(url: scrollbackURL, retentionCap: maxScrollbackBytes, protection: historyProtection ?? .system())
             if let storedSizes = scrollbackFile?.replaySizesForTail(maxBytes: maxScrollbackBytes), !storedSizes.isEmpty {
                 replaySizes = storedSizes
             }
-            let history = ScrollbackFile.loadTail(url: scrollbackURL, maxBytes: maxScrollbackBytes)
+            let history = scrollbackFile?.loadTail(maxBytes: maxScrollbackBytes) ?? Data()
             if !history.isEmpty {
                 let chunkSize = 16 * 1024
                 var seq: UInt64 = 1
@@ -397,18 +454,44 @@ public final class RealPty: @unchecked Sendable {
             envp.forEach { $0.map { free($0) } }
         }
 
-        guard let spawned = Self.spawnOnPTY(argv: argv, envp: envp, cwd: cwdC, rows: rows, cols: cols) else {
+        var prepared = [-1 as Int32, -1 as Int32]
+        defer { for descriptor in prepared where descriptor >= 0 { sysClose(descriptor) } }
+        if initialStandardInput != nil {
+            guard pipe(&prepared) == 0,
+                  fcntl(prepared[0], F_SETFD, FD_CLOEXEC) == 0, fcntl(prepared[1], F_SETFD, FD_CLOEXEC) == 0,
+                  harness_set_nonblocking(prepared[1]) == 0 else { freeChildStrings(); throw PtyError.launchFailed }
+            #if canImport(Darwin)
+            guard fcntl(prepared[1], F_SETNOSIGPIPE, 1) == 0 else { freeChildStrings(); throw PtyError.launchFailed }
+            #endif
+            // forkpty replaces descriptors 0–2 in the child. Pin both pipe ends
+            // above that range even when the launching service has closed stdio.
+            for index in prepared.indices where prepared[index] < 3 {
+                let duplicate = fcntl(prepared[index], F_DUPFD_CLOEXEC, 3)
+                guard duplicate >= 0 else { freeChildStrings(); throw PtyError.launchFailed }
+                sysClose(prepared[index]); prepared[index] = duplicate
+            }
+        }
+        guard let spawned = Self.spawnOnPTY(argv: argv, envp: envp, cwd: cwdC, rows: rows, cols: cols, standardInput: prepared[0]) else {
             freeChildStrings()
             throw PtyError.launchFailed
         }
         // Parent: the child holds its own copy-on-write view; free ours.
         freeChildStrings()
+        let ownership = OwnedChild(pid: spawned.pid)
         lifecycleLock.lock()
-        generation &+= 1
+        generation &+= 1; ownedChildren[generation] = ownership
         self.master = spawned.master
         self.childPID = spawned.pid
+        let inputGeneration = generation
         lifecycleLock.unlock()
-        AgentDetector.registerRootPID(spawned.pid, forSurfaceKey: id)
+        if let initialStandardInput {
+            let writer = PtyInputWriter(queue: DispatchQueue(label: "com.harness.workload.stdin"))
+            launchInputWriter = writer
+            // Admission transfers ownership; the writer closes its descriptor at
+            // the end of the prepared bytes, providing an unambiguous EOF.
+            let descriptor = prepared[1]; prepared[1] = -1
+            _ = writer.write(initialStandardInput, master: (descriptor, inputGeneration))
+        }
         // NB: reading + exit-watching are NOT started here — see `start()`. The child is forked
         // (so its buffered output and eventual exit are captured once we begin), but the owner must
         // wire `onExit`/`onOutput` before we can deliver an exit: a child that dies in the
@@ -455,7 +538,91 @@ public final class RealPty: @unchecked Sendable {
     /// Input to the shell, in order, never blocking a thread (see `PtyInputWriter`).
     @discardableResult
     public func write(_ data: Data) -> Bool {
-        inputWriter.write(data, master: dupMaster())
+        guard !usesPreparedStandardInput else { return data.isEmpty }
+        inputPolicyLock.lock(); defer { inputPolicyLock.unlock() }
+        lifecycleLock.lock()
+        let current = generation, fd = master >= 0 ? sysDup(master) : -1
+        lifecycleLock.unlock()
+        let accepted = inputWriter.write(data, master: fd >= 0 ? (fd, current) : nil)
+        if accepted, !data.isEmpty { lastInputGeneration = current }
+        return accepted
+    }
+
+    var freshShellIdentity: String? {
+        inputPolicyLock.lock(); defer { inputPolicyLock.unlock() }
+        lifecycleLock.lock(); defer { lifecycleLock.unlock() }
+        guard !isClosed, childPID > 0, master >= 0, lastInputGeneration != generation,
+              promptGeneration == generation, supportsPromptResume, tcgetpgrp(master) == childPID else { return nil }
+        return "\(childPID):\(generation)"
+    }
+
+    /// The descriptor belongs to the checked shell even if it exits or respawns
+    /// during the OS probes. A stale request can never reach a replacement PTY.
+    func insertResume(_ command: String, expectedIdentity: String, submit: Bool = false) throws {
+        guard !command.isEmpty, command.utf8.count <= 32 * 1024,
+              !command.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }) else { throw ResumeError.unavailable }
+        inputPolicyLock.lock(); defer { inputPolicyLock.unlock() }
+        lifecycleLock.lock()
+        let pid = childPID, current = generation
+        let fd = !isClosed && master >= 0 ? sysDup(master) : -1
+        lifecycleLock.unlock()
+        guard fd >= 0 else { throw ResumeError.shellChanged }
+        guard pid > 0, expectedIdentity == "\(pid):\(current)", lastInputGeneration != current,
+              promptGeneration == current, supportsPromptResume, tcgetpgrp(fd) == pid else { sysClose(fd); throw ResumeError.shellChanged }
+        // A submitted resume is one write, consumed once by this fresh shell identity.
+        // Only the explicitly configured restore path supplies submit=true.
+        guard inputWriter.write(Data((command + (submit ? "\r" : "")).utf8), master: (fd, current)) else { throw ResumeError.shellChanged }
+        lastInputGeneration = current
+    }
+    private var supportsPromptResume: Bool {
+        ["zsh", "bash", "fish", "sh", "dash", "ksh"].contains(URL(fileURLWithPath: shell).lastPathComponent)
+            && !(launchArgumentsOverride ?? []).contains(where: { $0 == "-c" || $0 == "--command" })
+    }
+    private func observeResumePrompt(_ data: Data, generation observed: UInt64) {
+        if resumeScanGeneration != observed { resumeScanner = PtyStreamScanner(); resumeScanGeneration = observed }
+        var marker: String?, paste: Bool?
+        resumeScanner.visit(data) { anchored in
+            switch anchored.event {
+            case let .bracketedPaste(enabled): paste = enabled
+            case let .osc(133, body, _):
+                let value = body.split(separator: ";", maxSplits: 1).first
+                if value == "A" || value == "C" || value == "D" { marker = value.map(String.init) }
+            case .ris: marker = ""; paste = false
+            default: break
+            }
+        }
+        guard marker != nil || paste != nil else { return }
+        inputPolicyLock.lock(); defer { inputPolicyLock.unlock() }
+        lifecycleLock.lock(); let current = generation; lifecycleLock.unlock()
+        guard observed == current else { return }
+        if let paste { pasteGeneration = paste ? observed : nil }
+        if let marker { promptGeneration = marker == "A" ? observed : nil }
+
+    }
+    func insertExplanation(_ text: String, agentPID: Int32, agentGeneration: String) throws {
+        guard text.utf8.count <= 32 * 1024,
+              !text.unicodeScalars.contains(where: { $0.value < 32 && $0 != "\n" && $0 != "\t" || (0x7f...0x9f).contains($0.value) }) else {
+            throw SessionHostError.refused("The explanation message contains unsupported controls or exceeds its size limit.")
+        }
+        inputPolicyLock.lock(); defer { inputPolicyLock.unlock() }
+        lifecycleLock.lock()
+        let root = childPID, current = generation, fd = !isClosed && master >= 0 ? sysDup(master) : -1
+        lifecycleLock.unlock()
+        guard fd >= 0 else { throw SessionHostError.refused("The target agent's terminal has closed.") }
+        guard pasteGeneration == current, ProcessScan.generation(agentPID) == agentGeneration,
+              getpgid(agentPID) > 0, getpgid(agentPID) == tcgetpgrp(fd) else {
+            sysClose(fd); throw SessionHostError.refused("The intended agent is no longer in the foreground or has not enabled bracketed paste. The explanation was not inserted.")
+        }
+        let parents = ProcessScan.parentMap()
+        var cursor = agentPID, belongs = false
+        for _ in 0..<64 {
+            if cursor == root { belongs = true; break }
+            guard let next = parents[cursor], next > 0, next != cursor else { break }; cursor = next
+        }
+        guard belongs, ProcessScan.generation(agentPID) == agentGeneration else { sysClose(fd); throw SessionHostError.refused("The target agent's process identity changed.") }
+        let paste = Data(("\u{1b}[200~" + text + "\u{1b}[201~").utf8)
+        guard inputWriter.write(paste, master: (fd, current)) else { throw SessionHostError.refused("The explanation did not fit the terminal input queue.") }
+        lastInputGeneration = current
     }
 
     @discardableResult
@@ -506,8 +673,11 @@ public final class RealPty: @unchecked Sendable {
     /// start clean depending on intent. Surface subscribers keep their
     /// subscription (it's keyed by surface ID, not shell PID), so the GUI and
     /// any `harness-cli attach` simply see fresh output begin.
-    public func respawn(clearHistory: Bool, fallbackCwd: String? = nil) {
+    @discardableResult
+    public func respawn(clearHistory: Bool, fallbackCwd: String? = nil) -> Bool {
+        guard !usesPreparedStandardInput else { return false }
         lifecycleLock.lock()
+        guard ownedChildren.count < 64 else { lifecycleLock.unlock(); return false }
         let oldPID = childPID
         let oldFD = master
         let oldSource = readSource
@@ -569,7 +739,9 @@ public final class RealPty: @unchecked Sendable {
             let gen = generation
             lifecycleLock.unlock()
             childEnded(generation: gen)
+            return false
         }
+        return true
     }
 
     private func restartChild(cwd: String, shell: String, rows: UInt16, cols: UInt16) throws {
@@ -604,13 +776,13 @@ public final class RealPty: @unchecked Sendable {
             throw PtyError.launchFailed
         }
         freeChildStrings()
+        let ownership = OwnedChild(pid: spawned.pid)
         lifecycleLock.lock()
         generation &+= 1
-        let gen = generation
+        let gen = generation; ownedChildren[gen] = ownership
         self.master = spawned.master
         self.childPID = spawned.pid
         lifecycleLock.unlock()
-        AgentDetector.registerRootPID(spawned.pid, forSurfaceKey: id)
         startReading(fd: spawned.master, generation: gen)
         watchForExit(pid: spawned.pid, generation: gen)
     }
@@ -625,18 +797,23 @@ public final class RealPty: @unchecked Sendable {
         envp: [UnsafeMutablePointer<CChar>?],
         cwd: UnsafeMutablePointer<CChar>?,
         rows: UInt16,
-        cols: UInt16
+        cols: UInt16,
+        standardInput: Int32 = -1
     ) -> (pid: pid_t, master: Int32)? {
         #if canImport(Darwin)
+        let closeUpperBound = childFileDescriptorCloseUpperBound()
         var ws = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
         var amaster: Int32 = -1
         let pid = forkpty(&amaster, nil, nil, &ws)
         if pid < 0 { return nil }
         if pid == 0 {
+            if standardInput >= 0, dup2(standardInput, STDIN_FILENO) < 0 { _exit(127) }
+            closeInheritedFileDescriptors(except: 0, upperBound: closeUpperBound)
             if let cwd { _ = chdir(cwd) }
             execveChild(argv: argv, envp: envp)
             _exit(127)
         }
+        guard protectOwnerDescriptor(amaster, child: pid) else { return nil }
         return (pid, amaster)
         #elseif canImport(Glibc)
         // `posix_openpt`/`grantpt`/`unlockpt`/`ptsname` aren't in Swift's Glibc module, so the C shim
@@ -658,10 +835,11 @@ public final class RealPty: @unchecked Sendable {
             // leave it wired to the inherited master fd and misbehave. Bail instead.
             if slave < 0 { _ = sysClose(master); _exit(127) }
             _ = sysClose(master)
+            if standardInput >= 0, dup2(standardInput, STDIN_FILENO) < 0 { _exit(127) }
             closeInheritedFileDescriptors(except: slave, alreadyClosed: master, upperBound: closeUpperBound)
             _ = harness_pty_make_controlling(slave)
             _ = harness_pty_set_winsize(slave, rows, cols)
-            _ = dup2(slave, 0)
+            if standardInput < 0 { _ = dup2(slave, 0) }
             _ = dup2(slave, 1)
             _ = dup2(slave, 2)
             if slave > 2 { _ = sysClose(slave) }
@@ -670,10 +848,21 @@ public final class RealPty: @unchecked Sendable {
             _exit(127)
         }
         slavePath.map { free($0) }
+        guard protectOwnerDescriptor(master, child: pid) else { return nil }
         return (pid, master)
         #else
         return nil
         #endif
+    }
+
+    private static func protectOwnerDescriptor(_ descriptor: Int32, child: pid_t) -> Bool {
+        guard fcntl(descriptor, F_SETFD, FD_CLOEXEC) == 0 else {
+            _ = kill(child, SIGKILL); sysClose(descriptor)
+            var status: Int32 = 0
+            while waitpid(child, &status, 0) < 0, errno == EINTR {}
+            return false
+        }
+        return true
     }
 
     private static func childFileDescriptorCloseUpperBound() -> Int32 {
@@ -682,7 +871,9 @@ public final class RealPty: @unchecked Sendable {
         guard raw > 0 else { return 1024 }
         return Int32(min(raw, 65_536))
         #else
-        return 1024
+        var limit = rlimit()
+        guard getrlimit(RLIMIT_NOFILE, &limit) == 0 else { return 65536 }
+        return Int32(min(limit.rlim_cur, UInt64(Int32.max)))
         #endif
     }
 
@@ -722,9 +913,8 @@ public final class RealPty: @unchecked Sendable {
             harness_close_fds_from(3)
         }
         #else
-        // Darwin: iterate the explicit upper bound (forkpty is used on Darwin; this
-        // path is only compiled for Linux, but the function is referenced by the Linux
-        // branch of spawnOnPTY so it must also compile on Darwin — keep the loop).
+        // Darwin: the bound was obtained before fork. This closes transient file
+        // descriptors too, including a concurrently open history or candidate file.
         var fd: Int32 = 3
         while fd < upperBound {
             if fd != keep, fd != alreadyClosed { _ = sysClose(fd) }
@@ -750,37 +940,62 @@ public final class RealPty: @unchecked Sendable {
         }
     }
 
-    public func resize(rows: UInt16, cols: UInt16) {
-        guard ReplaySize(sequence: 0, cols: cols, rows: rows).isValid else { return }
-        // Serialize the resize boundary with reads, with a bounded drain so a continuously
-        // writing child cannot starve a resize.
+    private final class ResizeOutcome: @unchecked Sendable {
+        let signal = DispatchSemaphore(value: 0)
+        private let lock = NSLock()
+        private var cancelled = false, applied = false
+        func complete(_ success: Bool) { lock.lock(); applied = success; lock.unlock(); signal.signal() }
+        func shouldApply() -> Bool { lock.lock(); defer { lock.unlock() }; return !cancelled }
+        func result() -> Bool { lock.lock(); defer { lock.unlock() }; return applied }
+        func cancel() { lock.lock(); cancelled = true; lock.unlock() }
+    }
+    @discardableResult
+    public func resize(rows: UInt16, cols: UInt16) -> Bool {
+        guard ReplaySize(sequence: 0, cols: cols, rows: rows).isValid else { return false }
+        inputPolicyLock.lock()
         lifecycleLock.lock()
-        let requestedGeneration = generation
+        let requestedGeneration = generation, fd = !isClosed && master >= 0 ? sysDup(master) : -1
         lifecycleLock.unlock()
-        readQueue.async { [self] in
-            lifecycleLock.lock()
-            let fd = generation == requestedGeneration && master >= 0 ? sysDup(master) : -1
-            lifecycleLock.unlock()
-            guard fd >= 0 else { return }
-            defer { sysClose(fd) }
-            scrollbackLock.lock()
-            let unchanged = replaySizes.last?.cols == cols && replaySizes.last?.rows == rows
-            scrollbackLock.unlock()
-            guard !unchanged else { return }
-            absorbPendingOutput(fd: fd, generation: requestedGeneration)
-            lifecycleLock.lock()
-            defer { lifecycleLock.unlock() }
-            guard generation == requestedGeneration, !isClosed else { return }
-            scrollbackLock.lock()
-            defer { scrollbackLock.unlock() }
-            guard harness_pty_set_winsize(fd, rows, cols) == 0 else { return }
-            if idleGrid.parked { mergeParkedHistoryLocked() }
-            let size = ReplaySize(sequence: nextSequence, cols: cols, rows: rows)
-            if replaySizes.last?.sequence == nextSequence { replaySizes.removeLast() }
-            replaySizes.append(size)
-            scrollbackFile?.recordSize(cols: cols, rows: rows)
-            ScreenWarmer.shared.request(self)
-        }
+        guard fd >= 0 else { inputPolicyLock.unlock(); return false }
+        let outcome = ResizeOutcome()
+        let admitted = inputWriter.perform(afterInput: (fd, requestedGeneration), apply: { [self] in
+            let applied = readQueue.sync { () -> Bool in
+                var recorded: ReplaySize?
+                let result = { () -> Bool in
+                    guard outcome.shouldApply() else { return false }
+                    lifecycleLock.lock()
+                    let descriptor = generation == requestedGeneration && !isClosed && master >= 0 ? sysDup(master) : -1
+                    lifecycleLock.unlock()
+                    guard descriptor >= 0 else { return false }; defer { sysClose(descriptor) }
+                    scrollbackLock.lock()
+                    let unchanged = replaySizes.last?.cols == cols && replaySizes.last?.rows == rows
+                    scrollbackLock.unlock()
+                    if unchanged { return true }
+                    absorbPendingOutput(fd: descriptor, generation: requestedGeneration)
+                    lifecycleLock.lock(); defer { lifecycleLock.unlock() }
+                    guard generation == requestedGeneration, !isClosed, outcome.shouldApply() else { return false }
+                    scrollbackLock.lock(); defer { scrollbackLock.unlock() }
+                    guard harness_pty_set_winsize(descriptor, rows, cols) == 0 else { return false }
+                    if idleGrid.parked { mergeParkedHistoryLocked() }
+                    let size = ReplaySize(sequence: nextSequence, cols: cols, rows: rows)
+                    if replaySizes.last?.sequence == nextSequence { replaySizes.removeLast() }
+                    recorded = size
+                    replaySizes.append(size); scrollbackFile?.recordSize(cols: cols, rows: rows)
+                    ScreenWarmer.shared.request(self)
+                    return true
+                }()
+                if let recorded {
+                    subscribersLock.lock(); let handlers = Array(geometrySubscribers.values); subscribersLock.unlock()
+                    for handler in handlers { handler(recorded) }
+                }
+                return result
+            }
+            outcome.complete(applied)
+        }, cancel: { outcome.complete(false) })
+        inputPolicyLock.unlock()
+        guard admitted else { return false }
+        guard outcome.signal.wait(timeout: .now() + 1) == .success else { outcome.cancel(); return false }
+        return outcome.result()
     }
 
     public func currentWorkingDirectory() -> String? {
@@ -790,6 +1005,8 @@ public final class RealPty: @unchecked Sendable {
     /// The live child PID (`lifecycleLock`-guarded read). Returns -1 once closed/reaped.
     /// Callers that probed cwd off-lock re-read this at commit time to confirm a respawn
     /// didn't swap the child out from under them (committing the OLD child's cwd for the NEW one).
+    var processGeneration: UInt64 { lifecycleLock.lock(); defer { lifecycleLock.unlock() }; return generation }
+
     public var currentChildPID: pid_t {
         lifecycleLock.lock(); defer { lifecycleLock.unlock() }; return childPID
     }
@@ -943,17 +1160,21 @@ public final class RealPty: @unchecked Sendable {
         // bookkeeping won't evict its (eventual) reaped-record out from under the query below.
         lifecycleLock.lock()
         pendingEscalations.insert(dyingGeneration)
+        let child = ownedChildren[dyingGeneration]
         lifecycleLock.unlock()
-        killQueue.asyncAfter(deadline: .now() + killGrace) { [weak self] in
-            guard let self else { return }
-            self.lifecycleLock.lock()
-            let alreadyReaped = self.reapedGenerations.contains(dyingGeneration)
-            self.pendingEscalations.remove(dyingGeneration)
-            self.lifecycleLock.unlock()
-            // Already reaped ⇒ the watcher's waitpid returned and the PID may be recycled — don't
-            // signal it. Still unreaped but the process is gone (kill(pid,0)!=0) ⇒ nothing to do.
-            guard !alreadyReaped, kill(pid, 0) == 0 else { return }
-            kill(pid, SIGKILL)
+        killQueue.asyncAfter(deadline: .now() + killGrace) { [weak self, child] in
+            if let self {
+                self.lifecycleLock.lock()
+                self.pendingEscalations.remove(dyingGeneration)
+                while self.reapedGenerations.count > Self.maxReapedGenerationsTracked,
+                      let oldest = self.reapedGenerations.subtracting(self.pendingEscalations).min() {
+                    self.reapedGenerations.remove(oldest)
+                }
+                self.lifecycleLock.unlock()
+            }
+            // This ownership token survives deinit. Kernel birth identity protects
+            // the waitpid-to-bookkeeping race against signaling a recycled PID.
+            child?.escalate()
         }
     }
 
@@ -964,10 +1185,12 @@ public final class RealPty: @unchecked Sendable {
             return
         }
         isClosed = true
-        inputWriter.reset()
+        inputWriter.reset(); launchInputWriter?.reset()
         let dyingGeneration = generation
         generation &+= 1
+        pendingExitDelivery = (dyingGeneration, nil)
         let pid = childPID
+        let needsWatcher = !started
         let source = readSource
         let fd = master
         readSource = nil
@@ -975,15 +1198,18 @@ public final class RealPty: @unchecked Sendable {
         childPID = -1
         lifecycleLock.unlock()
 
-        AgentDetector.unregisterRootPID(forSurfaceKey: id)
         if pid > 0 {
+            if needsWatcher { watchForExit(pid: pid, generation: dyingGeneration) }
             kill(pid, SIGTERM)
             scheduleKillEscalation(pid: pid, dyingGeneration: dyingGeneration)
         }
         if let source {
             source.cancel()
-        } else if fd >= 0 {
-            sysClose(fd)
+        } else {
+            readQueue.async { [weak self] in
+                if fd >= 0 { self?.absorbPendingOutput(fd: fd, generation: dyingGeneration); sysClose(fd) }
+                self?.deliverExitAfterOutput(generation: dyingGeneration)
+            }
         }
     }
 
@@ -1023,6 +1249,10 @@ public final class RealPty: @unchecked Sendable {
     public func flushScrollback() {
         scrollbackFile?.flush()
     }
+    var retainedHistory: ScrollbackFile? { scrollbackFile }
+    func recoverHistory(protection: HistoryProtection) throws { try scrollbackFile?.recover(protection: protection) }
+    var historyUnavailable: String? { scrollbackFile?.unavailableReason }
+    var historyProtection: HistoryProtection.Kind? { scrollbackFile?.protection.kind }
 
     /// Permanently delete this surface's persisted scrollback — called when the surface leaves the
     /// layout for good, so the file can't linger or be resurrected by a late flush.
@@ -1203,11 +1433,33 @@ public final class RealPty: @unchecked Sendable {
                     continue
                 }
             }
-            if scalar.value < 0x20, scalar != "\n", scalar != "\t" { i += 1; continue }
+            if (scalar.value < 0x20 && scalar != "\n" && scalar != "\t") || (0x7f...0x9f).contains(scalar.value) { i += 1; continue }
             out.unicodeScalars.append(scalar)
             i += 1
         }
         return out
+    }
+    func commandOutput(span: ShellCommandSpan, maximumBytes: Int) throws -> CommandOutput {
+        guard span.surfaceID == id, span.streamIdentity == streamIdentity, let end = span.endSequence, end >= span.startSequence,
+              (1...65536).contains(maximumBytes) else { throw SessionHostError.refused("A completed command span and a 1–65536 byte limit are required.") }
+        scrollbackLock.lock()
+        let entries = replaySegmentsLocked()
+        let retainedStart = entries.first?.sequence ?? nextSequence
+        let availableEnd = min(end, nextSequence)
+        scrollbackLock.unlock()
+        guard retainedStart <= span.startSequence else {
+            return CommandOutput(span: span, text: "", evicted: true, truncated: availableEnd < end)
+        }
+        var excerpt = TerminalOutputExcerpt(maximumBytes: maximumBytes)
+        for entry in entries {
+            let entryEnd = entry.sequence + UInt64(entry.data.count)
+            guard entryEnd > span.startSequence, entry.sequence < availableEnd else { continue }
+            let low = Int(max(span.startSequence, entry.sequence) - entry.sequence)
+            let high = Int(min(availableEnd, entryEnd) - entry.sequence)
+            excerpt.feed(entry.data.subdata(in: low..<high))
+        }
+        return CommandOutput(span: span, text: excerpt.text, evicted: false,
+            truncated: excerpt.isTruncated || availableEnd < end)
     }
 
     /// After `threshold` seconds without a PTY read: keep the screen as VT bytes (sealed in the
@@ -1308,6 +1560,11 @@ public final class RealPty: @unchecked Sendable {
         return (screen.gridResident, screen.fedThrough, screen.bytesFed)
     }
 
+    var ringStart: UInt64 {
+        scrollbackLock.lock(); defer { scrollbackLock.unlock() }
+        return ringLocked().first?.sequence ?? nextSequence
+    }
+
     /// One past the ring's last byte.
     var ringEnd: UInt64 {
         scrollbackLock.lock(); defer { scrollbackLock.unlock() }
@@ -1388,7 +1645,7 @@ public final class RealPty: @unchecked Sendable {
     private func parkedScreenLocked() -> ScreenFrame? {
         if let parkedScreen { return parkedScreen }
         guard let url = parkFileURL(), let sealed = try? Data(contentsOf: url),
-              let plain = SnapshotCipher.open(sealed: sealed, key: parkKey()) else { return nil }
+              let plain = try? parkProtection().open(sealed, identity: "checkpoint:" + id, sequence: ringEnd) else { return nil }
         return ScreenFrame.decode(plain)
     }
 
@@ -1527,17 +1784,20 @@ public final class RealPty: @unchecked Sendable {
         return directory?.appendingPathComponent("\(id).park")
     }
 
-    private func parkKey() -> Data {
-        if let parkKeyOverride { return parkKeyOverride }
-        let directory = parkDirectoryOverride
-            ?? persistedScrollbackURL?.deletingLastPathComponent()
-            ?? HarnessPaths.runtimeDirectory
-        return SnapshotKeyStore.loadOrCreate(socketDirectory: directory)
+    private func parkProtection() -> HistoryProtection {
+        if let parkKeyOverride {
+            #if os(macOS)
+            return (try? HistoryProtection(keyMaterial: parkKeyOverride)) ?? .unavailable("Invalid diagnostic key.")
+            #else
+            return .system()
+            #endif
+        }
+        return scrollbackFile?.protection ?? .unavailable("Persistence is disabled.")
     }
 
     /// Seal `frame` to the park file. False when it couldn't be written.
     private func writeParkFile(_ frame: ScreenFrame) -> Bool {
-        guard let url = parkFileURL(), let sealed = SnapshotCipher.seal(plain: frame.encoded(), key: parkKey()) else { return false }
+        guard let url = parkFileURL(), let sealed = try? parkProtection().seal(frame.encoded(), identity: "checkpoint:" + id, sequence: frame.sequence) else { return false }
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         guard (try? sealed.write(to: url, options: .atomic)) != nil else { return false }
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
@@ -1605,10 +1865,11 @@ public final class RealPty: @unchecked Sendable {
 
     /// `watching`: the subscriber paints the pane (a client). While one does, the daemon leaves
     /// the screen grid where it is: the client has its own.
-    public func subscribe(watching: Bool = true, _ handler: @escaping (Data, UInt64) -> Void) -> UUID {
+    public func subscribe(watching: Bool = true, onResize: ((ReplaySize) -> Void)? = nil, _ handler: @escaping (Data, UInt64) -> Void) -> UUID {
         let token = UUID()
         subscribersLock.lock()
         subscribers[token] = handler
+        if let onResize { geometrySubscribers[token] = onResize }
         if watching { watchers.insert(token) }
         subscribersLock.unlock()
         return token
@@ -1619,9 +1880,11 @@ public final class RealPty: @unchecked Sendable {
         subscribersLock.lock()
         if let token {
             subscribers.removeValue(forKey: token)
+            geometrySubscribers.removeValue(forKey: token)
             watchers.remove(token)
         } else {
             subscribers.removeAll()
+            geometrySubscribers.removeAll()
             watchers.removeAll()
         }
         let unwatched = watchers.isEmpty
@@ -1662,8 +1925,8 @@ public final class RealPty: @unchecked Sendable {
             }
             if n < 0, errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR { return }
             if n <= 0 {
-                // EOF / error: the shell for this generation ended.
-                self.childEnded(generation: gen)
+                // Closing the terminal output is not proof that its process ended.
+                self.outputEnded(fd: fd, generation: gen)
                 return
             }
             let data = Data(self.readBuffer.prefix(n))
@@ -1675,6 +1938,7 @@ public final class RealPty: @unchecked Sendable {
             // bytes in here, on this queue, before the fd is closed.
             self?.absorbPendingOutput(fd: fd, generation: gen)
             sysClose(fd)
+            self?.deliverExitAfterOutput(generation: gen)
         }
         readSource = source
         lifecycleLock.unlock()
@@ -1747,19 +2011,8 @@ public final class RealPty: @unchecked Sendable {
         scrollbackFile?.append(data, size: replaySizes.last)
         scrollbackLock.unlock()
 
-        // Throttle activity recording off the per-chunk hot path. A flood fires `handleOutput`
-        // tens of thousands of times a second; `recordActivity` (a `Date()` + two locks + two
-        // string-keyed dictionary writes) only needs coarse granularity — it sets the "working"
-        // edge (caught on the first chunk of a burst) and a "recent enough" timestamp for the
-        // ~1.5s agent scanner. Recording it at most every 50 ms keeps the semantics while removing
-        // it from ~99% of chunks under load. Sparse interactive output (gaps > 50 ms) still records
-        // every chunk. `lastActivityRecordUptime` is `readQueue`-confined like `handleOutput`.
-        let nowUptime = DispatchTime.now().uptimeNanoseconds
-        if nowUptime &- lastActivityRecordUptime >= 50_000_000 {
-            lastActivityRecordUptime = nowUptime
-            AgentDetector.recordActivity(forSurfaceKey: id)
-        }
         onOutput?(data)
+        let outputGeneration = generation ?? processGeneration
 
         // Fan out on the delivery queue (off the read loop). `data`/`sequence` are values; capture
         // self weakly so a teardown mid-flight just no-ops. The snapshot is taken at delivery time
@@ -1772,6 +2025,7 @@ public final class RealPty: @unchecked Sendable {
         // prior chunk still queued here when the subscriber count changes, reordering output.
         deliveryQueue.async { [weak self] in
             guard let self else { return }
+            self.observeResumePrompt(data, generation: outputGeneration)
             self.subscribersLock.lock()
             let handlers = Array(self.subscribers.values)
             let watched = !self.watchers.isEmpty
@@ -1784,6 +2038,9 @@ public final class RealPty: @unchecked Sendable {
 
     private func watchForExit(pid: pid_t, generation gen: UInt64) {
         guard pid > 0 else { return }
+        lifecycleLock.lock()
+        guard let child = ownedChildren[gen], watchedGenerations.insert(gen).inserted else { lifecycleLock.unlock(); return }
+        lifecycleLock.unlock()
         #if canImport(Darwin)
         // Event-driven exit watching (kqueue EVFILT_PROC/NOTE_EXIT via DispatchSourceProcess)
         // instead of one thread blocked in `waitpid(pid, …, 0)` per live child. The blocking
@@ -1800,94 +2057,77 @@ public final class RealPty: @unchecked Sendable {
         // outlived `close()`), or it would zombie until daemon exit. If the surface is gone when
         // the event fires, the handler still reaps — only the bookkeeping is skipped.
         //
-        // Known kqueue race: a process source armed AFTER the child already exited may never
-        // fire (registration against an exited pid is not reliably delivered). The child can't
-        // have been *reaped* yet — we are the only parent and the only reaper — but it can be a
-        // zombie before `resume()`. The arm-check below closes the gap: one WNOHANG attempt
-        // right after arming. Either the source registered in time (arm-check sees the child
-        // alive, returns, source fires later) or the child beat us (arm-check reaps + cancels).
-        // Both paths funnel through `reapAndRecord`, whose generation guard under
-        // `lifecycleLock` makes the duplicate call a no-op — the kernel only ever hands the
-        // status to one `waitpid`.
+        // Registration is asynchronous: checking immediately after resume() leaves
+        // a gap in which a fast child exits before kqueue registration completes.
+        // Check in the registration handler, after the event mechanism is armed.
+        // A NOTE_EXIT can precede wait-status availability, so its handler waits
+        // for that already-exiting child rather than cancelling after WNOHANG=0.
         let source = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .global())
-        source.setEventHandler { [weak self] in
-            // Break the self-retain cycle first (idempotent); the source has done its job.
-            source.cancel()
+        source.setRegistrationHandler { [weak self, child] in
             guard let self else {
-                // Surface deallocated while the child was still dying: reap the zombie anyway
-                // (the whole point of keeping the watcher alive past teardown). No bookkeeping
-                // remains to update.
-                var status: Int32 = 0
-                _ = waitpid(pid, &status, WNOHANG)
+                var status: Int32 = 0, result: pid_t
+                repeat { result = waitpid(pid, &status, WNOHANG) } while result < 0 && errno == EINTR
+                if result == pid { child.markReaped(); source.cancel() }
                 return
             }
-            self.reapAndRecord(pid: pid, generation: gen, cancelling: nil)
+            self.reapAndRecord(pid: pid, generation: gen, source: source, waitForExit: false)
+        }
+        source.setEventHandler { [weak self, child] in
+            guard let self else {
+                if !child.isReaped {
+                    var status: Int32 = 0, result: pid_t
+                    repeat { result = waitpid(pid, &status, 0) } while result < 0 && errno == EINTR
+                    if result == pid { child.markReaped() }
+                }
+                source.cancel()
+                return
+            }
+            self.reapAndRecord(pid: pid, generation: gen, source: source, waitForExit: true)
         }
         source.resume()
-        // Arm-check (see above): catch a child that exited before the source registered.
-        // Synchronous and non-blocking (WNOHANG) — watchForExit's callers (start/respawn on the
-        // registry path) tolerate a single syscall, and keeping it inline avoids capturing the
-        // source existential in a @Sendable async closure (setEventHandler's closure is the one
-        // place the source may be captured; that pattern is already used by DaemonServer).
-        reapAndRecord(pid: pid, generation: gen, cancelling: source)
         #else
-        // Linux fallback: the original one-blocked-thread-per-child design. Correct and simple;
-        // the event-driven equivalent (pidfd + epoll, kernel 5.3+) is a future refinement —
-        // headless daemons host far fewer concurrent sessions than the desktop app, so the
-        // thread cost is acceptable there for now.
-        DispatchQueue.global().async { [weak self] in
+        // The Linux waiter owns only its child token, so deallocating a surface
+        // neither parks its terminal state indefinitely nor abandons child reaping.
+        DispatchQueue.global().async { [weak self, child] in
+            var status: Int32 = 0, reaped: pid_t
+            repeat { reaped = waitpid(pid, &status, 0) } while reaped < 0 && errno == EINTR
+            guard reaped == pid else { return }
+            child.markReaped()
             guard let self else { return }
-            var status: Int32 = 0
-            let reaped = waitpid(pid, &status, 0)
-            let decoded = reaped == pid ? Self.decodeWaitStatus(status) : nil
-            // Record before calling childEnded: when the EOF path wins the isClosed race it
-            // can't reap the zombie (this blocked waitpid claims it) — it polls for this
-            // generation-tagged record instead, so the real status still reaches onExit.
+            let decoded = Self.decodeWaitStatus(status)
             self.lifecycleLock.lock()
             self.reapedExit = (gen, decoded)
             self.recordReapedGenerationLocked(gen)
             self.lifecycleLock.unlock()
+            self.onReaped?(gen, decoded)
             self.childEnded(generation: gen, exitStatus: decoded)
         }
         #endif
     }
 
     #if canImport(Darwin)
-    /// Reap `pid` (non-blocking) and record the result for generation `gen` — the shared body of
-    /// the process-source event handler and its post-arm race check. Exactly one caller wins:
-    /// the kernel hands the wait status to a single `waitpid`, and the `reapedGenerations` guard
-    /// under `lifecycleLock` makes the loser's call (and any later duplicate) a no-op.
-    ///
-    /// `cancelling` is the still-armed source to tear down IF this call observed the exit — the
-    /// arm-check passes it so a child that died before registration doesn't leave a source that
-    /// will never fire (and would otherwise self-retain forever). When the child is still alive
-    /// (`waitpid` returns 0) the source must stay armed, so it is deliberately NOT cancelled.
-    /// The event-handler path passes nil (it already cancelled itself).
-    ///
-    /// Mirrors the recording contract of the old blocking watcher verbatim: `reapedExit` +
-    /// `recordReapedGenerationLocked` BEFORE `childEnded`, so the EOF path's bounded poll and
-    /// the SIGKILL escalation's recycled-PID guard observe the reap exactly as before.
-    private func reapAndRecord(pid: pid_t, generation gen: UInt64, cancelling source: DispatchSourceProcess?) {
-        var status: Int32 = 0
-        let reaped = waitpid(pid, &status, WNOHANG)
+    /// Registration checks are nonblocking; an exit event waits only for a child
+    /// the kernel has already reported as exiting. No thread waits on a live shell.
+    /// Both source handlers serialize with lifecycle bookkeeping, including the
+    /// generation guard before waitpid can observe a recycled process identity.
+    private func reapAndRecord(pid: pid_t, generation gen: UInt64, source: DispatchSourceProcess, waitForExit: Bool) {
         lifecycleLock.lock()
-        if reapedGenerations.contains(gen) {
-            // The other path (handler vs arm-check) already handled this generation.
-            lifecycleLock.unlock()
-            return
+        guard !reapedGenerations.contains(gen) else {
+            lifecycleLock.unlock(); source.cancel(); return
         }
+        var status: Int32 = 0, reaped: pid_t
+        repeat { reaped = waitpid(pid, &status, waitForExit ? 0 : WNOHANG) } while reaped < 0 && errno == EINTR
         guard reaped == pid else {
-            // Still running (arm-check before exit) — leave the source armed to fire later.
-            // A -1/ECHILD here means the EOF path's WNOHANG won a self-exit race; it delivers
-            // the status itself and no escalation is live in that flow (see childEnded).
             lifecycleLock.unlock()
+            if waitForExit { source.cancel() }
             return
         }
         let decoded = Self.decodeWaitStatus(status)
         reapedExit = (gen, decoded)
         recordReapedGenerationLocked(gen)
         lifecycleLock.unlock()
-        source?.cancel()
+        source.cancel()
+        onReaped?(gen, decoded)
         childEnded(generation: gen, exitStatus: decoded)
     }
     #endif
@@ -1896,6 +2136,8 @@ public final class RealPty: @unchecked Sendable {
     /// holds `lifecycleLock`. Generations are monotonic and only those with a live kill-escalation
     /// timer are queried, so evicting the lowest entries over the cap is always safe.
     private func recordReapedGenerationLocked(_ gen: UInt64) {
+        ownedChildren.removeValue(forKey: gen)?.markReaped()
+        watchedGenerations.remove(gen)
         reapedGenerations.insert(gen)
         // Evict the lowest generation that has NO pending escalation. A generation whose SIGKILL
         // escalation is still armed must stay queryable until that timer fires, even if ≥cap newer
@@ -1916,12 +2158,20 @@ public final class RealPty: @unchecked Sendable {
         return nil
     }
 
-    /// Called when a child for generation `gen` ends (read EOF or `waitpid`
-    /// returning). Tears down + fires `onExit` exactly once, and only if `gen` is
-    /// still current — a respawn/close that advanced the generation means this is a
-    /// superseded child whose death must NOT touch the live one. The EOF path and
-    /// the `waitpid` path both call this; the `isClosed` guard makes the second a
-    /// no-op so `onExit` fires once.
+    private func outputEnded(fd: Int32, generation gen: UInt64) {
+        lifecycleLock.lock()
+        guard generation == gen, master == fd, !isClosed else { lifecycleLock.unlock(); return }
+        let source = readSource
+        readSource = nil; master = -1
+        lifecycleLock.unlock()
+        // The reaper remains armed and childPID remains owned. Queries and empty
+        // restart checks still see the live program, even with no output descriptor.
+        if let source { source.cancel() }
+        else { readQueue.async { [weak self] in self?.absorbPendingOutput(fd: fd, generation: gen); sysClose(fd) } }
+    }
+
+    /// Called when waitpid proves the current child exited. A superseded child
+    /// cannot close its replacement or deliver another terminal exit notice.
     private func childEnded(generation gen: UInt64, exitStatus: Int32? = nil) {
         lifecycleLock.lock()
         guard generation == gen, !isClosed else {
@@ -1932,46 +2182,36 @@ public final class RealPty: @unchecked Sendable {
         generation &+= 1
         let source = readSource
         let fd = master
-        let pid = childPID
         readSource = nil
         master = -1
         childPID = -1
         lifecycleLock.unlock()
 
-        // The read loop's EOF usually wins the race against the `waitpid` watcher, so an
-        // EOF-path call carries no status — and it cannot reap the zombie itself, because the
-        // watcher's blocked `waitpid` claims it. Poll briefly for the watcher's recorded
-        // status (generation-tagged so a respawned child never reads its predecessor's), with
-        // a direct WNOHANG attempt in case this path got here before the watcher even ran.
-        // Bounded: the child is already dead, so this resolves in a few milliseconds; the
-        // deadline only guards pathological cases. Best-effort — nil if it never resolves.
-        var exitStatus = exitStatus
-        if exitStatus == nil, pid > 0 {
-            var status: Int32 = 0
-            let deadline = DispatchTime.now() + .milliseconds(500)
-            while DispatchTime.now() < deadline {
-                lifecycleLock.lock()
-                let recorded = reapedExit
-                lifecycleLock.unlock()
-                if let recorded, recorded.generation == gen {
-                    exitStatus = recorded.status
-                    break
-                }
-                if waitpid(pid, &status, WNOHANG) == pid {
-                    exitStatus = Self.decodeWaitStatus(status)
-                    break
-                }
-                usleep(5_000)
+        // The process watcher is the authority for natural exit. Terminal EOF
+        // alone is handled by outputEnded and cannot retire a live child.
+        lifecycleLock.lock()
+        if isClosed, generation == gen &+ 1 { pendingExitDelivery = (gen, exitStatus); inputWriter.reset(); launchInputWriter?.reset() }
+        lifecycleLock.unlock()
+        if let source {
+            // The cancel handler drains the tail before scheduling the exit behind
+            // already accepted output deliveries. Subscribers cannot lose the last write.
+            source.cancel()
+        } else {
+            readQueue.async { [self] in
+                if fd >= 0 { absorbPendingOutput(fd: fd, generation: gen); sysClose(fd) }
+                deliverExitAfterOutput(generation: gen)
             }
         }
-
-        AgentDetector.unregisterRootPID(forSurfaceKey: id)
-        if let source {
-            source.cancel()
-        } else if fd >= 0 {
-            sysClose(fd)
+    }
+    private func deliverExitAfterOutput(generation gen: UInt64) {
+        lifecycleLock.lock()
+        guard let notice = pendingExitDelivery, notice.generation == gen else { lifecycleLock.unlock(); return }
+        pendingExitDelivery = nil
+        lifecycleLock.unlock()
+        deliveryQueue.async { [self] in
+            lifecycleLock.lock(); let current = isClosed && generation == gen &+ 1; lifecycleLock.unlock()
+            if current { onExit?(notice.status) }
         }
-        onExit?(exitStatus)
     }
 
     /// Copy bytes already queued on `fd` into the scrollback. Called from the read source's

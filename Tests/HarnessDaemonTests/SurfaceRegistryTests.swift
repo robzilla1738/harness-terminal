@@ -28,6 +28,45 @@ final class SurfaceRegistryTests: XCTestCase {
         if let root { try? FileManager.default.removeItem(at: root) }
     }
 
+    func testUploadIsPrivateAndRefusesNewWritesDuringHandover() throws {
+        let registry = SurfaceRegistry(); defer { registry.stopMonitoring() }
+        let bytes = Data("synthetic authenticated upload".utf8)
+        guard case let .text(path) = registry.handle(.writeTempFile(name: "image ' fixture.png", data: bytes)) else { return XCTFail("Upload was not acknowledged") }
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), bytes)
+        let permissions = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? NSNumber)
+        XCTAssertEqual(permissions.intValue & 0o777, 0o600)
+        guard case .text = registry.handover(.prepare, checkpoint: nil) else { return XCTFail("Could not prepare the isolated handover") }
+        guard case let .error(message) = registry.handle(.writeTempFile(name: "second", data: bytes)) else { return XCTFail("Warm/quiesced daemon accepted an upload mutation") }
+        XCTAssertTrue(message.contains("handover"))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), bytes)
+    }
+
+    func testPreviewHasNoPTYAndLegacyClientsCannotDiscardItsContent() throws {
+        let registry = SurfaceRegistry()
+        guard case let .snapshot(initial) = registry.handle(.getSnapshotForClient(capabilities: [DaemonStats.paneContent])), let workspace = initial.activeWorkspace, let tab = workspace.activeTab, let leaf = tab.rootPane.allLeaves().first else { return XCTFail("Missing initial shell") }
+        let rootPID = try XCTUnwrap(registry.sessionForTesting(surfaceID: leaf.surfaceID.uuidString)?.currentChildPID)
+        let spec = PreviewSpecification(url: "http://localhost:3000", title: "Fixture")
+        guard case .error = registry.handle(.previewPane(surfaceID: leaf.surfaceID.uuidString, specification: spec, updateExisting: false, capabilities: [])) else { return XCTFail("Missing response capability must refuse mutation") }
+        guard case let .paneID(id) = registry.handle(.previewPane(surfaceID: leaf.surfaceID.uuidString, specification: spec, updateExisting: false, capabilities: [DaemonStats.paneContent])), case let .snapshot(snapshot) = registry.handle(.getSnapshotForClient(capabilities: [DaemonStats.paneContent])), let preview = snapshot.activeWorkspace?.activeTab?.rootPane.allLeaves().first(where: { $0.id == id }) else { return XCTFail("Preview creation failed") }
+        XCTAssertEqual(preview.content, .preview(spec)); XCTAssertNil(registry.sessionForTesting(surfaceID: preview.surfaceID.uuidString))
+        XCTAssertEqual(registry.sessionForTesting(surfaceID: leaf.surfaceID.uuidString)?.currentChildPID, rootPID)
+        for request in [IPCRequest.ensureSurface(surfaceID: preview.surfaceID.uuidString, cwd: "/tmp", shell: nil, rows: 24, cols: 80, scrollbackBytes: nil), .send(surfaceID: preview.surfaceID.uuidString, text: "echo unexpected\n")] {
+            guard case let .error(message) = registry.handle(request) else { return XCTFail("Preview must never create or receive terminal input") }; XCTAssertTrue(message.contains("terminal pane"))
+        }
+        guard case let .snapshot(legacy) = registry.handle(.getSnapshot) else { return XCTFail("Legacy response missing") }
+        XCTAssertTrue(legacy.activeWorkspace!.activeTab!.rootPane.allLeaves().allSatisfy { $0.paneContent.isTerminal })
+        guard case .error = registry.handle(.library(.capture(sessionID: workspace.activeSession!.id, name: "Unsafe old capture"))) else { return XCTFail("Old clients must not lose typed layout data") }
+        guard case .ok = registry.handle(.libraryForClient(.capture(sessionID: workspace.activeSession!.id, name: "Typed"), capabilities: [DaemonStats.paneContent])) else { return XCTFail("Typed setup capture failed") }
+        guard case let .snapshot(saved) = registry.handle(.getSnapshotForClient(capabilities: [DaemonStats.paneContent])), let setup = saved.library.setups.first else { return XCTFail("Missing saved setup") }
+        XCTAssertTrue(setup.containsTypedContent)
+        guard case .error = registry.handle(.library(.save(setup.terminalProjection()))) else { return XCTFail("Old setup save must not overwrite previews") }
+        guard case .sessionID = registry.handle(.libraryForClient(.open(setup.id, mode: .newCopy), capabilities: [DaemonStats.paneContent])) else { return XCTFail("Typed setup restore failed") }
+        guard case let .snapshot(restored) = registry.handle(.getSnapshotForClient(capabilities: [DaemonStats.paneContent])) else { return XCTFail("Missing restored layout") }
+        let restoredPreview = try XCTUnwrap(restored.activeWorkspace?.activeTab?.rootPane.allLeaves().first(where: { !$0.paneContent.isTerminal }))
+        XCTAssertEqual(restoredPreview.content, .preview(spec)); XCTAssertNil(registry.sessionForTesting(surfaceID: restoredPreview.surfaceID.uuidString))
+        for session in restored.workspaces.flatMap(\.sessions) { for tab in session.tabs { for leaf in tab.rootPane.allLeaves() { _ = registry.handle(.killPane(paneID: leaf.id)) } } }
+    }
+
     func testProgramStatusUpdatesFromTheByteStreamWithNoWindow() {
         let registry = SurfaceRegistry()
         guard case let .surfaces(surfaces) = registry.handle(.listSurfaces), let surface = surfaces.first else {
@@ -652,7 +691,7 @@ final class SurfaceRegistryTests: XCTestCase {
 
     func testListAgentsIsEmptyUntilAnAgentIsDetected() {
         let registry = SurfaceRegistry()
-        guard case let .agents(agents) = registry.handle(.listAgents) else {
+        guard case let .agents(agents) = registry.handle(.listAgents()) else {
             return XCTFail("expected agents")
         }
         XCTAssertTrue(agents.isEmpty, "no agents until the scanner reports one")
@@ -668,7 +707,7 @@ final class SurfaceRegistryTests: XCTestCase {
             target.surfaceID: AgentSnapshot(kind: .claudeCode, executable: "/bin/claude", pid: 99, activity: .working),
         ])
 
-        guard case let .agents(agents) = registry.handle(.listAgents) else {
+        guard case let .agents(agents) = registry.handle(.listAgents()) else {
             return XCTFail("expected agents")
         }
         XCTAssertEqual(agents.count, 1)
@@ -690,7 +729,7 @@ final class SurfaceRegistryTests: XCTestCase {
             return XCTFail("expected ok")
         }
 
-        guard case let .agents(agents) = registry.handle(.listAgents) else {
+        guard case let .agents(agents) = registry.handle(.listAgents()) else {
             return XCTFail("expected agents")
         }
         XCTAssertEqual(agents.count, 1)

@@ -62,7 +62,7 @@ final class TabSpacingTests: XCTestCase {
         bar.layoutSubtreeIfNeeded()
         let pill = try XCTUnwrap(bar.subviews.first { $0.accessibilityRole() == .radioButton })
         let gapAbove = bar.bounds.height - pill.frame.maxY
-        XCTAssertGreaterThan(gapAbove, 0)
+        XCTAssertEqual(gapAbove, 8, accuracy: 0.001)
 
         for separated in [true, false] {
             for gap in stride(from: 0.0, through: 24.0, by: 0.5) {

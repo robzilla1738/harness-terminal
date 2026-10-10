@@ -41,6 +41,8 @@ targets:
         product: HarnessRemoteProtocol
       - target: HarnessDaemon
         embed: false
+      - target: HarnessSessionHost
+        embed: false
       - target: harness-cli
         embed: false
       - package: Harness
@@ -72,12 +74,15 @@ targets:
         script: |
           set -euo pipefail
           mkdir -p "$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH"
+          cp "$BUILT_PRODUCTS_DIR/HarnessSessionHost" "$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/HarnessSessionHost"
           cp "$BUILT_PRODUCTS_DIR/HarnessDaemon" "$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/HarnessDaemon"
           cp "$BUILT_PRODUCTS_DIR/harness-cli" "$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/harness-cli"
         inputFiles:
+          - $(BUILT_PRODUCTS_DIR)/HarnessSessionHost
           - $(BUILT_PRODUCTS_DIR)/HarnessDaemon
           - $(BUILT_PRODUCTS_DIR)/harness-cli
         outputFiles:
+          - $(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/HarnessSessionHost
           - $(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/HarnessDaemon
           - $(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/harness-cli
   HarnessDaemonCore:
@@ -94,6 +99,8 @@ targets:
         product: HarnessTerminalEngine
       - package: Harness
         product: CHarnessSys
+      - package: Harness
+        product: CSQLite
     settings:
       SWIFT_VERSION: "6.0"
       MACOSX_DEPLOYMENT_TARGET: "15.0"
@@ -118,9 +125,35 @@ targets:
         product: HarnessTerminalEngine
       - package: Harness
         product: CHarnessSys
+      - package: Harness
+        product: CSQLite
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness.daemon
       PRODUCT_NAME: HarnessDaemon
+      CODE_SIGN_ENTITLEMENTS: Harness.entitlements
+      SWIFT_VERSION: "6.0"
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+  HarnessSessionHost:
+    type: tool
+    platform: macOS
+    sources:
+      - Packages/HarnessDaemon/Sources/HarnessSessionHostMain
+    dependencies:
+      - target: HarnessDaemonCore
+      - package: Harness
+        product: HarnessRemoteProtocol
+      - package: Harness
+        product: HarnessCore
+      - package: Harness
+        product: HarnessTerminalEngine
+      - package: Harness
+        product: CHarnessSys
+      - package: Harness
+        product: CSQLite
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness.session-host
+      PRODUCT_NAME: HarnessSessionHost
+      CODE_SIGN_ENTITLEMENTS: Harness.entitlements
       SWIFT_VERSION: "6.0"
       MACOSX_DEPLOYMENT_TARGET: "15.0"
   harness-cli:
@@ -142,12 +175,17 @@ targets:
       - package: Harness
         product: CHarnessSys
       - package: Harness
+        product: CSQLite
+      - package: Harness
         product: HarnessScript
+      - package: Harness
+        product: HarnessMCP
       - package: Harness
         product: CHarnessQR
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness.cli
       PRODUCT_NAME: harness-cli
+      CODE_SIGN_ENTITLEMENTS: Harness.entitlements
       SWIFT_VERSION: "6.0"
       MACOSX_DEPLOYMENT_TARGET: "15.0"
       OTHER_SWIFT_FLAGS: "$(inherited) -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessSys.modulemap -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessBase64.modulemap"

@@ -9,11 +9,10 @@ import Sparkle
 final class SparkleUpdater {
     static let shared = SparkleUpdater()
 
-    /// `startingUpdater: true` begins scheduled background checks immediately (honoring the
-    /// `SUEnableAutomaticChecks` / `SUScheduledCheckInterval` Info.plist keys and the user's
-    /// choice the first time it asks).
+    /// Only bundles with a configured feed start background checks. Isolated previews have
+    /// no feed and must not interrupt their first-run flow with an unusable updater prompt.
     let controller = SPUStandardUpdaterController(
-        startingUpdater: true,
+        startingUpdater: Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil,
         updaterDelegate: nil,
         userDriverDelegate: nil
     )

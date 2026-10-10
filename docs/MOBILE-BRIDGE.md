@@ -1,13 +1,13 @@
 # Harness mobile companion bridge
 
-The [Harness iPhone and iPad companion](https://github.com/robzilla1738/harness-ios) connects over a normal, host-key-verified SSH **exec channel without a PTY**:
+The private [Harness iPhone and iPad companion](https://github.com/robzilla1738/harness-ios) connects over a normal, host-key-verified SSH **exec channel without a PTY**:
 
 ```sh
 /absolute/path/to/harness-cli mobile-bridge --stdio --protocol 1
 ```
 
 The bridge connects to the existing local Harness daemon. It never restarts a daemon or
-creates a login shell. A daemon without `mobile-companion-v1` returns `updateRequired`. The public companion-ready host release is Harness 2.1.0 (build 132) or later.
+creates a login shell. A daemon without `mobile-companion-v1` returns `updateRequired`. Bridge compatibility is negotiated from the host capabilities; private companion availability is separate from host support.
 Use one control channel for RPC and state subscriptions, and a separate channel for each
 visible terminal pane. The shared Foundation-only `HarnessRemoteProtocol` package is the
 authoritative wire model and codec.
@@ -75,14 +75,20 @@ harness-cli pair --json
 
 `remote pair` and `/remote` are CLI aliases; `remote list/add/remove` are unchanged. In a local Harness pane on macOS, pairing opens the compact native QR window. SSH and headless terminals keep the text QR, shown only when both its width and height fit; the copyable link is always available there. `mobile-setup --json` retains the existing metadata interface.
 
-The app scans a versioned `harness://connect` link, reviews the host, and asks for the account password once to install and verify a device key. Existing saved credentials are reused for the same address/port/account. The shared `RemotePairingInfo` parser also accepts legacy JSON and rejects unsupported versions, duplicate URI fields, invalid fingerprints and oversized data.
+A compatible private companion scans a versioned `harness://connect` link and reviews the host before SSH authentication. Existing account credentials or a device key approved locally on the host provide authentication. Automatic remote device-key installation is unsupported; it requires local approval through `mobile-key install --stdin`. The shared `RemotePairingInfo` parser also accepts legacy JSON and rejects unsupported versions, duplicate URI fields, invalid fingerprints and oversized data.
 
 Metadata contains address, user, the SSH Ed25519 host-key fingerprint and absolute bridge executable path; it contains no credentials and grants no access by itself. Enable SSH first and use a reachable LAN or an existing Tailscale connection. The helper reads `/etc/ssh/ssh_host_ed25519_key.pub`; nonstandard servers must present that key or use manual setup with their verified identity. No SSH configuration or router ports are changed. The portable shell QR encoder is pinned and attributed in `Packages/CHarnessQR/README.md`.
 
-`device.installKey` validates a plain Ed25519 public key and atomically installs one managed
-authorized-keys line. `device.removeKey` removes only that exact managed line and returns
-`removed`; unrelated/manual lines are preserved. `file.upload` accepts a filename and
-base64 data and returns the host's temporary-file path.
+Device trust changes require the local host. Redirect the phone's plain Ed25519 public
+key to `harness-cli mobile-key install --stdin`; use `mobile-key remove --stdin` to remove
+that exact managed line. Unrelated SSH keys are preserved. Companion
+`device.installKey` and `device.removeKey` calls return an explicit local-administration
+error and are no longer advertised. Older clients that depended on remote key installation
+must use existing SSH account authentication or install their public key on the host first.
+`file.upload` accepts bounded file data over the authenticated bridge and returns a private
+temporary path. Specialized companion requests have explicit method schemas, effects,
+exposure and required daemon capabilities in `CompanionAPICatalog`; adding a daemon API
+does not grant companion access.
 
 ## Focused integration check
 

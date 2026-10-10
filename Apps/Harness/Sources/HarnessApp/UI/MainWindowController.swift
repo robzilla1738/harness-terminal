@@ -30,7 +30,7 @@ final class MainWindowController: NSWindowController {
         )
 
         let previousWindow = NSApp.orderedWindows.first { $0.contentViewController is MainSplitViewController }
-        let window = NSWindow(
+        let window = HarnessMainWindow(
             contentRect: NSRect(origin: .zero, size: HarnessDesign.defaultWindowSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
@@ -46,13 +46,12 @@ final class MainWindowController: NSWindowController {
         if #available(macOS 11.0, *) {
             window.titlebarSeparatorStyle = .none
         }
-        // An empty unified toolbar gives the title row the standard 52pt band, which lowers
-        // the traffic lights to the height the tab row sits at. Measure where they land
-        // before the chrome is built, so tabs and sidebar controls center on that line.
+        // Retain native window controls in a transparent unified titlebar. Their
+        // vertical center follows Harness's 46pt tab row (30pt pill + two 8pt gaps).
         let toolbar = NSToolbar(identifier: "HarnessTitleRow")
         window.toolbar = toolbar
         window.toolbarStyle = .unified
-        HarnessDesign.titleRowCenter = Self.trafficLightCenter(in: window) ?? HarnessDesign.titleRowCenter
+        Self.alignTrafficLights(in: window)
         HarnessDesign.trafficLightTrailingEdge = Self.trafficLightTrailingEdge(in: window) ?? HarnessDesign.trafficLightTrailingEdge
         Self.applyWindowAppearance(window)
         let context = WindowContext(sessionID: sessionID, owner: owner)
@@ -74,8 +73,8 @@ final class MainWindowController: NSWindowController {
         window.setContentSize(NSSize(width: min(defaultSize.width, maxContent.width),
                                      height: min(defaultSize.height, maxContent.height)))
         self.init(window: window)
-        // A content controller can resize the window; the lights stay put relative to the top.
-        HarnessDesign.titleRowCenter = Self.trafficLightCenter(in: window) ?? HarnessDesign.titleRowCenter
+        // AppKit may relayout titlebar controls while installing the content controller.
+        Self.alignTrafficLights(in: window)
         HarnessDesign.trafficLightTrailingEdge = Self.trafficLightTrailingEdge(in: window) ?? HarnessDesign.trafficLightTrailingEdge
         // Window-edge hairline — topmost subview of the root contentView (added after the
         // split view loads, so it stays above all chrome). Click-through; layer island only.
@@ -200,6 +199,21 @@ final class MainWindowController: NSWindowController {
         )
     }
 
+    static func alignTrafficLights(in window: NSWindow) {
+        // Full-screen titlebar controls belong to the system's revealable toolbar.
+        guard !window.styleMask.contains(.fullScreen) else { return }
+        for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            guard let button = window.standardWindowButton(kind), let container = button.superview else { continue }
+            let rect = container.convert(button.frame, to: nil)
+            let desiredCenter = window.frame.height - HarnessDesign.titleRowCenter
+            let delta = desiredCenter - rect.midY
+            guard abs(delta) > 0.01 else { continue }
+            let target = container.convert(NSPoint(x: rect.midX, y: desiredCenter), from: nil)
+            button.setFrameOrigin(NSPoint(x: button.frame.minX,
+                                          y: button.frame.minY + target.y - button.frame.midY))
+        }
+    }
+
     static func trafficLightTrailingEdge(in window: NSWindow) -> CGFloat? {
         guard let button = window.standardWindowButton(.zoomButton), let frameView = button.superview else { return nil }
         let edge = frameView.convert(button.frame, to: nil).maxX
@@ -212,5 +226,14 @@ final class MainWindowController: NSWindowController {
         let inWindow = frameView.convert(button.frame, to: nil)
         let center = window.frame.height - inWindow.midY
         return center > 0 && center < 80 ? center.rounded() : nil
+    }
+}
+
+/// AppKit can reposition native titlebar buttons during window and toolbar updates.
+/// Reapply the shared center after that layout, without moving the window or its panes.
+private final class HarnessMainWindow: NSWindow {
+    override func update() {
+        super.update()
+        MainWindowController.alignTrafficLights(in: self)
     }
 }

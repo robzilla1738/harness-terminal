@@ -1,10 +1,10 @@
 import Foundation
 
-/// Edge peek, then overview, for the other tabs. `rows` and `columns` are the live
+/// Window-attached preview of tabs. `rows` and `columns` are the live
 /// pane's grid size captured when the peek opens. Nothing in this type writes them.
 public struct TabPeek: Equatable, Sendable {
     public enum Phase: Equatable, Sendable {
-        case closed, peeking, overview
+        case closed, peeking
     }
 
     public struct Tab: Equatable, Sendable, Identifiable {
@@ -36,16 +36,12 @@ public struct TabPeek: Equatable, Sendable {
         self.tabs = tabs
     }
 
-    /// Closed plus Reduce Motion opens the overview. Otherwise the first step peeks from the edge.
-    public mutating func toggle(reduceMotion: Bool) {
-        switch phase {
-        case .closed:
-            phase = reduceMotion ? .overview : .peeking
-        case .peeking:
-            phase = .overview
-        case .overview:
-            phase = .closed
-        }
+    public mutating func toggle() {
+        phase = phase == .closed ? .peeking : .closed
+    }
+
+    public mutating func select(id: String) {
+        if let index = tabs.firstIndex(where: { $0.id == id }) { selection = index }
     }
 
     public mutating func move(delta: Int) {
@@ -55,8 +51,11 @@ public struct TabPeek: Equatable, Sendable {
     }
 
     public mutating func replaceTabs(_ tabs: [Tab]) {
+        let selectedID = self.tabs.indices.contains(selection) ? self.tabs[selection].id : nil
         self.tabs = tabs
-        if tabs.isEmpty {
+        if let selectedID, let index = tabs.firstIndex(where: { $0.id == selectedID }) {
+            selection = index
+        } else if tabs.isEmpty {
             selection = 0
         } else {
             selection = min(selection, tabs.count - 1)

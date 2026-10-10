@@ -38,7 +38,7 @@ def geometry(element, transform=Identity):
                 transform = transform.transform(args)
             else:
                 raise ValueError(f"Unsupported transform: {name}")
-    if tag in {"path", "rect"}:
+    if tag in {"path", "rect", "circle", "ellipse", "polygon", "polyline"}:
         builder = PathBuilder()
         shape = ET.Element(tag, {k: v for k, v in element.attrib.items() if k != "transform"})
         builder.add_path_from_element(shape)
@@ -59,7 +59,32 @@ def icon(key, data):
         path.attrib["d"] = path.attrib["d"].split("z", 1)[1].strip()
         assert path.attrib["d"].startswith("m2705")
         path.attrib["d"] = "M2705 3998" + path.attrib["d"][10:]
-    if key in {"amp", "droid"}:
+    if key == "bob":
+        # The official favicon paints a full square through a helmet mask.
+        # Flatten the original helmet contour for a monochrome template; retain
+        # the body and eyes and omit only the gradient shading rectangle.
+        mask = next(e for e in root.iter() if e.tag.endswith("}mask"))
+        helmet = next(e for e in mask if e.attrib.get("style") == "fill:#fff")
+        for child in list(root):
+            if child.attrib.get("style") == "mask:url(#icon-mask)":
+                root.remove(child)
+        root.insert(0, helmet)
+    if key == "coderabbit":
+        # The official wordmark contains an inverse rabbit inside its orange
+        # medallion. Keep that original rabbit, without the text or background.
+        paths = [e for e in root if e.attrib.get("fill") == "#FEFEFE"]
+        assert len(paths) == 1
+        for child in list(root):
+            if child not in paths:
+                root.remove(child)
+    if key == "oz":
+        # The official pixel favicon wraps the W in two square background/border
+        # paths. Only its final foreground path is the agent's brand symbol.
+        paths = list(root)
+        assert len(paths) == 3 and all(e.tag.endswith("}path") for e in paths)
+        root.remove(paths[0])
+        root.remove(paths[1])
+    if key in {"amp", "droid", "devin"}:
         # Favicon backgrounds are replaced by Harness's flat badge face.
         for parent in root.iter():
             for child in list(parent):

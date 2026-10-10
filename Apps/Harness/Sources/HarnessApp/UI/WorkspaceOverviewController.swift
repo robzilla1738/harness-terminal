@@ -13,14 +13,18 @@ enum WorkspaceOverviewController {
         if let panel, panel.isVisible { close() } else { show() }
     }
 
+    static func present(relativeTo parent: NSWindow? = nil) {
+        if let panel, panel.isVisible { panel.makeKeyAndOrderFront(nil) } else { show(relativeTo: parent) }
+    }
+
     static func close() {
-        (panel?.contentView as? OverviewView)?.stop()
+        (panel?.contentView as? OverviewContainerView)?.stop()
         panel?.orderOut(nil)
         panel = nil
     }
 
-    private static func show() {
-        guard let parent = NSApp.keyWindow ?? NSApp.mainWindow else { return }
+    private static func show(relativeTo parent: NSWindow? = nil) {
+        guard let parent = parent ?? NSApp.keyWindow ?? NSApp.mainWindow else { return }
         let window = KeyablePanel(
             contentRect: parent.frame,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -32,15 +36,48 @@ enum WorkspaceOverviewController {
         window.backgroundColor = .clear
         window.isOpaque = false
         window.hasShadow = false
-        let view = OverviewView(frame: NSRect(origin: .zero, size: parent.frame.size))
+        let view = OverviewContainerView(frame: NSRect(origin: .zero, size: parent.frame.size))
         view.onClose = { close() }
         window.contentView = view
-        window.delegate = view
         window.setFrame(parent.frame, display: false)
         window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(view.filterField)
+        window.makeFirstResponder(view.initialResponder)
         panel = window
     }
+}
+
+@MainActor
+private final class OverviewContainerView: NSView {
+    var onClose: (() -> Void)?
+    private let modes = HarnessSegmented()
+    private let overview: OverviewView
+    private var board: AgentBoardView?
+    var initialResponder: NSResponder { overview.filterField }
+    override init(frame: NSRect) {
+        overview = OverviewView(frame: NSRect(origin: .zero, size: frame.size))
+        super.init(frame: frame)
+        overview.autoresizingMask = [.width, .height]; overview.onClose = { [weak self] in self?.onClose?() }
+        addSubview(overview)
+        modes.setSegments(["Overview", "Board"])
+        modes.selectedSegment = 0; modes.target = self; modes.action = #selector(selectOverviewMode)
+        modes.setAccessibilityLabel("Overview mode"); modes.translatesAutoresizingMaskIntoConstraints = false; addSubview(modes)
+        NSLayoutConstraint.activate([modes.topAnchor.constraint(equalTo: topAnchor, constant: 10), modes.centerXAnchor.constraint(equalTo: centerXAnchor)])
+    }
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+    func stop() { overview.stop(); board?.stop() }
+    @objc private func selectOverviewMode() {
+        if modes.selectedSegment == 1 {
+            if board == nil {
+                let view = AgentBoardView(frame: bounds); view.autoresizingMask = [.width, .height]
+                view.onClose = { [weak self] in self?.onClose?() }; addSubview(view, positioned: .below, relativeTo: modes); board = view
+            }
+            overview.isHidden = true; board?.isHidden = false; window?.makeFirstResponder(board?.filterField)
+        } else {
+            board?.stop(); board?.removeFromSuperview(); board = nil
+            overview.isHidden = false; window?.makeFirstResponder(overview.filterField)
+        }
+    }
+    override func cancelOperation(_ sender: Any?) { onClose?() }
 }
 
 @MainActor

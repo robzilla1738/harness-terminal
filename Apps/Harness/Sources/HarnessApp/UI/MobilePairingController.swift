@@ -5,35 +5,33 @@ import HarnessRemoteProtocol
 import Network
 
 /// Credential-free pairing: a reachable address and trusted SSH fingerprint, presented
-/// together. The phone still authenticates and explicitly installs its own device key.
+/// together. The companion authenticates with an existing SSH credential; device trust is approved locally on the host.
 @MainActor
 final class MobilePairingController: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
     static let shared = MobilePairingController()
-    private let hostField = NSTextField(string: "")
+    private let hostField = HarnessTextField(string: "")
     private let addresses = NSPopUpButton()
     private let networkHint = NSTextField(wrappingLabelWithString: "Wi-Fi nearby. Tailscale from anywhere.")
     private var tailscale: TailscaleStatus?
     private var networkTask: Task<Void, Never>?
-    private let portField = NSTextField(string: "22")
+    private let portField = HarnessTextField(string: "22")
     private let status = NSTextField(wrappingLabelWithString: "")
     private let fingerprint = NSTextField(wrappingLabelWithString: "")
     private let qr = NSImageView()
-    private let generate = NSButton(title: "Update Code", target: nil, action: nil)
-    private let copy = NSButton(title: "Copy Connection", target: nil, action: nil)
+    private let generate = HarnessPillButton(title: "Update Code", kind: .primary)
+    private let copy = HarnessPillButton(title: "Copy Connection", kind: .secondary)
     private var metadata: Data?
     private var task: Task<Void, Never>?
     private var probe: NWConnection?
 
     private init() {
         let height = min(660, (NSScreen.main?.visibleFrame.height ?? 820) - 48)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: height), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: height), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Connect a Phone or iPad"
         window.isReleasedWhenClosed = false
         super.init(window: window)
         window.delegate = self
-        let heading = NSTextField(labelWithString: "Your work, within reach.")
-        heading.font = .systemFont(ofSize: 24, weight: .semibold)
-        let explanation = NSTextField(wrappingLabelWithString: "Open Harness on your phone and tap Scan QR code. Enter your Mac password once to set up a device key; future connections use the key automatically.")
+                let explanation = NSTextField(wrappingLabelWithString: "The private iOS companion scans this code and verifies the host. Connect with an existing SSH credential. Device-key approval requires the local host: harness-cli mobile-key install --stdin.")
         explanation.textColor = .secondaryLabelColor
         hostField.placeholderString = "Mac address or Tailscale name"
         hostField.setAccessibilityLabel("Reachable Mac address")
@@ -43,8 +41,8 @@ final class MobilePairingController: NSWindowController, NSWindowDelegate, NSTex
         networkHint.font = .systemFont(ofSize: 12)
         networkHint.textColor = .secondaryLabelColor
         networkHint.alignment = .center
-        let tailscaleButton = NSButton(title: "Set Up Tailscale…", target: self, action: #selector(setUpTailscale))
-        let refresh = NSButton(title: "Refresh", target: self, action: #selector(refreshNetworks))
+        let tailscaleButton = HarnessToolPage.button("Set Up Tailscale…", target: self, action: #selector(setUpTailscale))
+        let refresh = HarnessToolPage.button("Refresh", target: self, action: #selector(refreshNetworks))
         let networks = NSStackView(views: [addresses, tailscaleButton, refresh])
         networks.spacing = 8
         portField.setAccessibilityLabel("SSH port")
@@ -53,6 +51,7 @@ final class MobilePairingController: NSWindowController, NSWindowDelegate, NSTex
         portField.widthAnchor.constraint(equalToConstant: 58).isActive = true
         hostField.widthAnchor.constraint(greaterThanOrEqualToConstant: 200).isActive = true
         qr.imageScaling = .scaleNone
+        qr.isHidden = true
         qr.setAccessibilityLabel("Connection metadata QR code")
         qr.widthAnchor.constraint(equalToConstant: 220).isActive = true
         qr.heightAnchor.constraint(equalToConstant: 220).isActive = true
@@ -64,37 +63,27 @@ final class MobilePairingController: NSWindowController, NSWindowDelegate, NSTex
         generate.target = self; generate.action = #selector(updateCode)
         copy.target = self; copy.action = #selector(copyConnection)
         copy.isEnabled = false
-        let settings = NSButton(title: "Remote Login Settings…", target: self, action: #selector(openRemoteLogin))
+        let settings = HarnessToolPage.button("Remote Login Settings…", target: self, action: #selector(openRemoteLogin))
         let actions = NSStackView(views: [settings, generate, copy])
         actions.spacing = 10
         let note = NSTextField(wrappingLabelWithString: "This code contains no password or private key. Your phone verifies the host fingerprint before connecting.")
         note.font = .systemFont(ofSize: 12)
         note.textColor = .secondaryLabelColor
-        let stack = NSStackView(views: [heading, explanation, networks, networkHint, hostRow, qr, fingerprint, status, actions, note])
-        stack.orientation = .vertical
-        stack.alignment = .centerX
-        stack.spacing = 14
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        let content = PairingDocumentView()
-        content.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(stack)
-        let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
-        scroll.drawsBackground = false
-        scroll.documentView = content
-        window.contentView = scroll
-        NSLayoutConstraint.activate([
-            content.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 28),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -28),
-            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 26),
-            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -26),
-            explanation.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            note.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            fingerprint.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            status.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            networkHint.widthAnchor.constraint(equalTo: stack.widthAnchor),
-        ])
+        let code = NSStackView(views: [qr, fingerprint, status])
+        code.orientation = .vertical; code.alignment = .centerX; code.spacing = 12
+        let stack = NSStackView(views: [explanation, networks, networkHint, hostRow, code, actions, note])
+        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 14
+        stack.edgeInsets = NSEdgeInsets(top: 8, left: 16, bottom: 20, right: 16)
+        for view in [explanation, code, note] {
+            view.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true
+        }
+        for view in [fingerprint, status] {
+            view.widthAnchor.constraint(equalTo: code.widthAnchor).isActive = true
+        }
+        HarnessToolPage.group(stack, title: "Connection", views: [networks, networkHint, hostRow])
+        HarnessToolPage.install(in: window, title: "Connect a phone or iPad",
+            subtitle: "Scan a connection code with the private iOS companion.",
+            symbol: "iphone.and.arrow.forward", content: stack)
         window.center()
     }
     required init?(coder: NSCoder) { nil }
@@ -141,7 +130,7 @@ final class MobilePairingController: NSWindowController, NSWindowDelegate, NSTex
         let alert = NSAlert()
         alert.messageText = "Connect from anywhere with Tailscale"
         alert.informativeText = (tailscale?.message ?? "Install Tailscale on this Mac and your phone.")
-            + "\n\n1. Sign in to the same Tailscale account on both devices.\n2. Turn Tailscale on on both devices.\n3. Return here and choose Refresh, then scan the new QR code.\n\nKeep Remote Login enabled. Harness uses your Mac login password once, then its own device key."
+            + "\n\n1. Sign in to the same Tailscale account on both devices.\n2. Turn Tailscale on on both devices.\n3. Return here and choose Refresh, then scan the new QR code.\n\nKeep Remote Login enabled. Harness uses SSH authentication. Approve device keys locally on this host."
         alert.addButton(withTitle: tailscale?.installed == true ? "Open Tailscale" : "Get Tailscale")
         alert.addButton(withTitle: "Done")
         alert.beginSheetModal(for: window) { response in
@@ -161,14 +150,14 @@ final class MobilePairingController: NSWindowController, NSWindowDelegate, NSTex
 
     func controlTextDidChange(_ notification: Notification) {
         task?.cancel(); probe?.cancel(); probe = nil
-        metadata = nil; qr.image = nil; fingerprint.stringValue = ""; copy.isEnabled = false; generate.isEnabled = true
+        metadata = nil; qr.image = nil; qr.isHidden = true; fingerprint.stringValue = ""; copy.isEnabled = false; generate.isEnabled = true
         status.stringValue = "Choose Update Code to use this address and port."
     }
     func windowWillClose(_ notification: Notification) { task?.cancel(); networkTask?.cancel(); probe?.cancel(); probe = nil }
 
     @objc private func updateCode() {
         task?.cancel(); probe?.cancel(); probe = nil
-        metadata = nil; qr.image = nil; fingerprint.stringValue = ""; copy.isEnabled = false; generate.isEnabled = true
+        metadata = nil; qr.image = nil; qr.isHidden = true; fingerprint.stringValue = ""; copy.isEnabled = false; generate.isEnabled = true
         let host = hostField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !host.isEmpty, !host.contains(where: \.isWhitespace), let port = Int(portField.stringValue), (1...65535).contains(port) else {
             status.stringValue = "Enter a reachable address and a valid SSH port."
@@ -188,6 +177,7 @@ final class MobilePairingController: NSWindowController, NSWindowDelegate, NSTex
                 let code = Data(try info.connectionURL().absoluteString.utf8)
                 self.metadata = code
                 self.qr.image = self.qrImage(code)
+                self.qr.isHidden = self.qr.image == nil
                 self.fingerprint.stringValue = "SSH host key\n\(info.fingerprint)"
                 self.copy.isEnabled = true
                 self.generate.isEnabled = true
@@ -262,8 +252,4 @@ final class MobilePairingController: NSWindowController, NSWindowDelegate, NSTex
         }
         return data
     }
-}
-
-private final class PairingDocumentView: NSView {
-    override var isFlipped: Bool { true }
 }

@@ -7,6 +7,13 @@
 #define _DEFAULT_SOURCE
 
 #include "CHarnessSys.h"
+#ifdef __APPLE__
+#include <IOKit/IOMessage.h>
+unsigned int harness_power_can_sleep(void) { return kIOMessageCanSystemSleep; }
+unsigned int harness_power_will_sleep(void) { return kIOMessageSystemWillSleep; }
+unsigned int harness_power_did_wake(void) { return kIOMessageSystemHasPoweredOn; }
+unsigned int harness_power_sleep_cancelled(void) { return kIOMessageSystemWillNotSleep; }
+#endif
 
 #include <sys/ioctl.h>
 #include <signal.h>

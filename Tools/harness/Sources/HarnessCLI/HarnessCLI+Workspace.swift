@@ -115,7 +115,7 @@ extension HarnessCLI {
             exit(1)
         }
         let agents: [AgentSessionSummary]
-        if case let .agents(rows) = try checkedRequest(client, .listAgents) {
+        if case let .agents(rows) = try checkedRequest(client, .listAgents(capabilities: [DaemonStats.agentIdentities])) {
             agents = rows
         } else {
             agents = []

@@ -22,6 +22,7 @@ public struct SessionSnapshot: Codable, Sendable, Equatable {
     public var keepSessionsOnQuit: Bool
     public var library = SessionLibrary()
     public var persistenceError: String?
+    public var activityError: String?
     public var savedAt: Date
 
     public init(
@@ -61,7 +62,7 @@ public struct SessionSnapshot: Codable, Sendable, Equatable {
         case themeName
         case keepSessionsOnQuit
         case library
-        case persistenceError
+        case persistenceError, activityError
         case savedAt
     }
 
@@ -83,6 +84,7 @@ public struct SessionSnapshot: Codable, Sendable, Equatable {
         themeName = try container.decodeIfPresent(String.self, forKey: .themeName) ?? "Default"
         keepSessionsOnQuit = try container.decodeIfPresent(Bool.self, forKey: .keepSessionsOnQuit) ?? true
         persistenceError = try container.decodeIfPresent(String.self, forKey: .persistenceError)
+        activityError = try container.decodeIfPresent(String.self, forKey: .activityError)
         library = try container.decodeIfPresent(SessionLibrary.self, forKey: .library) ?? SessionLibrary()
         savedAt = try container.decodeIfPresent(Date.self, forKey: .savedAt) ?? .now
     }
@@ -100,6 +102,7 @@ public struct SessionSnapshot: Codable, Sendable, Equatable {
         try container.encode(keepSessionsOnQuit, forKey: .keepSessionsOnQuit)
         try container.encode(library, forKey: .library)
         try container.encodeIfPresent(persistenceError, forKey: .persistenceError)
+        try container.encodeIfPresent(activityError, forKey: .activityError)
         try container.encode(savedAt, forKey: .savedAt)
     }
 
@@ -115,6 +118,7 @@ public struct SessionSnapshot: Codable, Sendable, Equatable {
             && lhs.keepSessionsOnQuit == rhs.keepSessionsOnQuit
             && lhs.library == rhs.library
             && lhs.persistenceError == rhs.persistenceError
+            && lhs.activityError == rhs.activityError
             && lhs.savedAt == rhs.savedAt
     }
 }

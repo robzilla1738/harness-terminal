@@ -137,6 +137,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private var paletteHexValues: [String?] = Array(repeating: nil, count: 16)
     private var colorBindings: [ColorBinding] = []
     /// Live "Install Hooks / Reinstall Hooks" buttons keyed by agent (Agents page).
+    private var notificationPolicy: NotificationPolicyWindowController?
+    private var powerSettings: PowerSettingsWindowController?
+    private var activityProfiles: ActivityProfileWindowController?
     private var hookButtons: [AgentKind: NSButton] = [:]
 
     private struct ColorBinding {
@@ -430,6 +433,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         pages[.keys] = buildKeysPage()
         pages[.notifications] = buildNotificationsPage()
         pages[.agents] = buildAgentsPage()
+        pages[.tools] = buildToolsPage()
         pages[.advanced] = buildAdvancedPage()
         updateDependentRows()
     }
@@ -527,6 +531,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             case let v as IconTileView: v.applyChrome()
             case let v as HarnessSegmented: v.applyChrome()
             case let v as HarnessSelect: v.applyChrome()
+            case let v as HarnessPillButton: v.applyChrome()
             case let v as KeyRecorderView: v.applyChrome()
             case let v as SettingsSidebarButton: v.applyChrome()
             default: break
@@ -812,7 +817,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private func styleAsLink(_ button: NSButton) {
         button.bezelStyle = .accessoryBarAction
         button.isBordered = false
-        // The theme accent (derived from the cursor color) — never the macOS system blue.
+        // Use the shared neutral interface accent.
         let link = HarnessChrome.current.accent
         let attr = NSAttributedString(string: button.title, attributes: [
             .foregroundColor: link,
@@ -879,6 +884,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         let scrollGroup = settingsGroup("Scrolling", [
             settingsRow("Scrollback", hstack([scrollbackField, unitLabel("lines")], spacing: 6),
                         hint: "0 removes the line cap. Decoded history and raw output each retain up to 512 MiB per pane."),
+            settingsRow("Captured history", makeRoundedButton("History and Privacy…", action: #selector(openHistoryPrivacy)),
+                        hint: "Host or pane capture, encryption status, and recovery. Layout is separate from captured text."),
             settingsRow("Scroll speed", sliderRow(scrollMultiplierSlider, scrollMultiplierLabel)),
         ])
 
@@ -962,6 +969,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             settingsRow("Show banners", systemNotificationsToggle),
             settingsRow("Play sound", notificationSoundToggle, hint: "Chimes even with banners off."),
             statusRow,
+            settingsRow("Quiet hours and destinations", makeRoundedButton("Configure Policy…", action: #selector(openNotificationPolicy)), hint: "Opt-in external sinks, speech, content categories, quiet hours and delivery diagnostics."),
         ])
         refreshNotificationStatus()
 
@@ -969,9 +977,13 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     }
 
     @objc private func sendTestNotification() {
-        DesktopNotifier.sendTest()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.refreshNotificationStatus() }
+        notificationStatusRow?.hint = "Requesting a test notification…"
+        DesktopNotifier.sendTest { [weak self] message in
+            self?.notificationStatusRow?.hint = message
+        }
     }
+
+    @objc private func openHistoryPrivacy() { SessionCoordinator.shared.presentHistoryPrivacy() }
 
     /// Toggling banners on is only meaningful if macOS is also allowing them. So when the user
     /// enables the setting, trigger the system permission prompt (or route to System Settings if
@@ -1015,6 +1027,71 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         }
     }
 
+    // MARK: - Page: Tools
+
+    private func buildToolsPage() -> NSView {
+        func group(_ title: String, _ items: [(String, String, Selector)]) -> NSView {
+            settingsGroup(title, items.map { name, hint, action in
+                let button = HarnessToolPage.button("Open…", target: self, action: action)
+                button.setAccessibilityLabel("Open " + name)
+                return settingsRow(name, button, hint: hint)
+            })
+        }
+        return page("Tools", subtitle: "Open every workspace tool and configuration screen from here. Pane tools use the selected terminal and host.", [
+            group("Activity and agents", [
+                ("Overview and Board", "Digest, tool timeline, resources, attention, and resume controls.", #selector(openToolOverview)),
+                ("Search all sessions", "Search retained terminal output with host, agent, time, and regex filters.", #selector(openToolSearch)),
+                ("AI summaries", "Providers, model discovery, consent, and summary history.", #selector(openToolSummaries)),
+                ("Schedules", "Agent schedules, definitions, and occurrence history.", #selector(openToolSchedules)),
+                ("Usage profiles", "Provider profiles and approved transcript directories.", #selector(openActivityProfiles)),
+                ("Power", "Working-agent sleep policy and temporary overrides.", #selector(openPowerSettings)),
+            ]),
+            group("Workspace", [
+                ("Fan-out", "Launch a task across agents and compare their work.", #selector(openToolFanout)),
+                ("Managed worktrees", "Create, inspect, compare, and clean up managed checkouts.", #selector(openToolWorktrees)),
+                ("Saved setups", "Saved layouts and their startup suggestions.", #selector(openToolSetups)),
+                ("Recently closed", "Review closed sessions and restore their layout.", #selector(openToolRecentlyClosed)),
+                ("Preview panes", "Open a local development page beside the selected pane.", #selector(openToolPreview)),
+                ("Recordings and export", "Record output, review redactions, and export an asciicast.", #selector(openToolRecordings)),
+            ]),
+            group("Privacy and connections", [
+                ("History and privacy", "Capture choices, encryption status, and recovery.", #selector(openHistoryPrivacy)),
+                ("Notification policy", "Quiet hours, speech, external destinations, and delivery status.", #selector(openNotificationPolicy)),
+                ("Hook policy", "Trusted guardrails, hook installation, and redacted audit.", #selector(openToolHookPolicy)),
+                ("Local plugins", "Review a local plugin before trusting its palette actions.", #selector(openToolPlugins)),
+                ("Remote host", "Add an SSH host using existing credentials.", #selector(openToolRemote)),
+                ("Phone or iPad", "Connection code for the private iOS companion.", #selector(openToolMobile)),
+            ]),
+            group("Import", [
+                ("tmux layouts", "Preview a layout and save it without acquiring existing PTYs.", #selector(openToolTmux)),
+                ("Settings and keybindings", "Review supported Ghostty settings and binding conflicts.", #selector(openToolSettingsImport)),
+                ("iTerm2 colors", "Preview and import a color preset.", #selector(openToolColorsImport)),
+            ]),
+        ])
+    }
+
+    @objc private func openToolSearch() { OutputSearchController.shared.present() }
+    @objc private func openToolOverview() {
+        // End the button's tracking loop before transferring focus to a borderless panel.
+        let parent = view.window
+        DispatchQueue.main.async { WorkspaceOverviewController.present(relativeTo: parent) }
+    }
+    @objc private func openToolSummaries() { SessionCoordinator.shared.presentAISummaries() }
+    @objc private func openToolSchedules() { SessionCoordinator.shared.presentSchedules() }
+    @objc private func openToolFanout() { SessionCoordinator.shared.presentFanout() }
+    @objc private func openToolWorktrees() { SessionCoordinator.shared.presentManagedWorktrees() }
+    @objc private func openToolSetups() { SessionLibraryController.shared.present() }
+    @objc private func openToolRecentlyClosed() { SessionLibraryController.shared.present(recentlyClosed: true) }
+    @objc private func openToolPreview() { SessionCoordinator.shared.presentPreview() }
+    @objc private func openToolRecordings() { SessionCoordinator.shared.presentRecordings() }
+    @objc private func openToolHookPolicy() { SessionCoordinator.shared.presentHookPolicy() }
+    @objc private func openToolPlugins() { PluginTrustController.review(relativeTo: view.window) }
+    @objc private func openToolRemote() { RemoteHostSheet.present() }
+    @objc private func openToolMobile() { MobilePairingController.shared.present() }
+    @objc private func openToolTmux() { SessionCoordinator.shared.presentTmuxImport() }
+    @objc private func openToolSettingsImport() { SettingsImportController.present() }
+    @objc private func openToolColorsImport() { ThemeImportController.presentITermImport() }
+
     // MARK: - Page: Agents
 
     private func buildAgentsPage() -> NSView {
@@ -1024,6 +1101,10 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         )
 
         let detectionGroup = settingsGroup("Setup", [
+            settingsRow("Power", makeRoundedButton("Configure Power…", action: #selector(openPowerSettings)),
+                        hint: "Keep working agents awake on AC power; battery use is off by default."),
+            settingsRow("Usage profiles", makeRoundedButton("Configure Profiles…", action: #selector(openActivityProfiles)),
+                        hint: "Name provider profiles and approve custom transcript roots without reading credentials."),
             settingsRow("Detection rules", makeRoundedButton("Edit agents.json…", action: #selector(openAgentsJSON)),
                         hint: "Which executables count as each agent."),
             settingsRow("Setup prompt", makeRoundedButton("Copy Prompt", action: #selector(copySetupPrompt)),
@@ -1031,6 +1112,33 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         ])
 
         return page("Agents", [agentsGroup, detectionGroup])
+    }
+
+    @objc private func openNotificationPolicy() {
+        if notificationPolicy == nil {
+            let controller = NotificationPolicyWindowController()
+            controller.onClose = { [weak self] in self?.notificationPolicy = nil; self?.syncAppearanceControlsFromSettings() }
+            notificationPolicy = controller
+        }
+        notificationPolicy?.showWindow(nil)
+    }
+
+    @objc private func openPowerSettings() {
+        if powerSettings == nil {
+            let controller = PowerSettingsWindowController()
+            controller.onClose = { [weak self] in self?.powerSettings = nil }
+            powerSettings = controller
+        }
+        powerSettings?.showWindow(nil)
+    }
+
+    @objc private func openActivityProfiles() {
+        if activityProfiles == nil {
+            let controller = ActivityProfileWindowController()
+            controller.onClose = { [weak self] in self?.activityProfiles = nil }
+            activityProfiles = controller
+        }
+        activityProfiles?.showWindow(nil)
     }
 
     /// The same designed badge used by tabs, plus detection details and hook setup.
@@ -1090,26 +1198,22 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
     @objc private func installHooksClicked(_ sender: NSButton) {
         guard let kind = hookButtons.first(where: { $0.value === sender })?.key else { return }
-        sender.title = "Installing…"
         sender.isEnabled = false
-        // File I/O off-main; weak captures so a closed Settings window isn't kept alive.
-        DispatchQueue.global(qos: .userInitiated).async { [weak self, weak sender] in
-            let outcome = Result { try AgentHookInstaller.install(agent: kind) }
-            DispatchQueue.main.async {
-                guard let sender else { return }
-                sender.isEnabled = true
-                let host = self?.view
-                switch outcome {
-                case .success(let result):
-                    sender.title = "Reinstall Hooks"
-                    sender.toolTip = result.backedUp.map { "Backed up your previous config to \($0.lastPathComponent)" }
-                        ?? "Installed at \(result.path.path)"
-                    if let host { Toast.show("Installed \(kind.displayName) hooks", in: host) }
-                case .failure(let error):
-                    sender.title = "Install Hooks"
-                    sender.toolTip = "Failed: \(error.localizedDescription)"
-                    if let host { Toast.show("Couldn't install \(kind.displayName) hooks", in: host) }
-                }
+        Task { @MainActor [weak self, weak sender] in
+            defer { sender?.isEnabled = true }
+            let preparation = await Task.detached(priority: .userInitiated) { Result { try AgentHookInstaller.prepare(agent: kind) } }.value
+            guard let self, let sender else { return }
+            do {
+                let proposal = try preparation.get()
+                guard HookInstallationReview.approve(proposal) else { return }
+                let installed = await Task.detached(priority: .userInitiated) { Result { try AgentHookInstaller.apply(proposal) } }.value
+                let result = try installed.get()
+                sender.title = "Reinstall Hooks"
+                sender.toolTip = result.backedUp.map { "Backed up previous configuration to \($0.path)" } ?? result.path.path
+                Toast.show(kind == .codex ? "Hooks configured — review approvals in Codex /hooks" : "Hooks configured — review the provider's trust prompts", in: self.view)
+            } catch {
+                let alert = NSAlert(); alert.messageText = "Hook configuration could not be installed"
+                alert.informativeText = error.localizedDescription; alert.runModal()
             }
         }
     }
@@ -2058,8 +2162,13 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         keepSessionsToggle.isEnabled = false
         SessionCoordinator.shared.requestDaemonAsync(.setKeepSessionsOnQuit(keep)) { [weak self] response in
             guard let self else { return }
-            if response != nil { AppDelegate.recordModePersistenceApplied(mode) }
-            let effective = response == nil ? SessionCoordinator.shared.snapshot.keepSessionsOnQuit : keep
+            let effective: Bool
+            if case .ok? = response {
+                AppDelegate.recordModePersistenceApplied(mode)
+                effective = keep
+            } else {
+                effective = SessionCoordinator.shared.snapshot.keepSessionsOnQuit
+            }
             self.keepSessionsToggle.isEnabled = true
             self.keepSessionsToggle.state = effective ? .on : .off
             self.experienceSummaryLabel.stringValue = self.selectedExperienceMode.summary(keepSessionsOnQuit: effective)
@@ -2858,7 +2967,7 @@ final class SettingsWindowCloseProxy: NSObject, NSWindowDelegate {
 
 /// The Settings window's sidebar panes, in sidebar order.
 enum SettingsPane: Int, CaseIterable {
-    case appearance, colors, terminal, keys, notifications, agents, advanced
+    case appearance, colors, terminal, keys, notifications, agents, advanced, tools
 
     var title: String {
         switch self {
@@ -2869,6 +2978,7 @@ enum SettingsPane: Int, CaseIterable {
         case .notifications: return "Notifications"
         case .agents: return "Agents"
         case .advanced: return "Advanced"
+        case .tools: return "Tools"
         }
     }
 
@@ -2881,6 +2991,7 @@ enum SettingsPane: Int, CaseIterable {
         case .notifications: return "bell.badge"
         case .agents: return "sparkles"
         case .advanced: return "slider.horizontal.3"
+        case .tools: return "square.grid.2x2"
         }
     }
 
@@ -2899,6 +3010,8 @@ enum SettingsPane: Int, CaseIterable {
             return ["notify", "banner", "alert", "bell", "sound", "blocked", "failed", "error", "done", "finished", "permission"]
         case .agents:
             return ["agent", "icons", "codex", "claude", "cursor", "pi", "hermes", "openclaw", "hook", "detection"]
+        case .tools:
+            return ["search all sessions", "regex", "output", "overview", "board", "digest", "timeline", "resources", "resume", "ai summaries", "provider", "models", "schedules", "usage profiles", "power", "fan-out", "worktrees", "saved setups", "recently closed", "preview", "recordings", "export", "history", "privacy", "notification policy", "quiet hours", "hook policy", "plugins", "remote", "ssh", "phone", "ipad", "tmux", "import", "ghostty", "keybindings", "iterm2"]
         case .advanced:
             return ["options", "status", "mouse", "mode", "clipboard", "base-index", "renumber", "monitor", "rename", "repeat", "history", "pane", "border", "harness-cli", "set-option", "performance", "pipeline", "render", "identity", "term_program", "xtversion", "shift+enter", "kitty", "ghostty"]
         }

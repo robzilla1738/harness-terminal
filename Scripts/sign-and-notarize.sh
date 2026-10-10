@@ -18,7 +18,7 @@ set -euo pipefail
 #   --sign-only / SIGN_ONLY=1 : sign locally and skip notarization without failing.
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$ROOT/Harness.app"
+APP="${HARNESS_SIGNING_APP:-$ROOT/Harness.app}"
 # Require an explicit identity so a release is never signed with the wrong or
 # ambiguous one. Use SIGNING_IDENTITY=- for an ad-hoc (unsigned) local build.
 IDENTITY="${SIGNING_IDENTITY:?Set SIGNING_IDENTITY to your Developer ID (or '-' for an ad-hoc local build).}"
@@ -34,6 +34,11 @@ if [[ ! -d "$APP" ]]; then
 fi
 
 echo "Signing $APP..."
+python3 "$ROOT/Scripts/package-macos-tools.py" "$APP"
+HISTORY_ENTITLEMENTS="$(mktemp -d -t harness-history-entitlements)"
+trap 'rm -rf "$HISTORY_ENTITLEMENTS"' EXIT
+python3 "$ROOT/Scripts/prepare-macos-signing.py" "$APP" "$IDENTITY" "${APPLE_TEAM_ID:-}" \
+  "${HARNESS_PROVISIONING_PROFILE_DIRECTORY:-}" "$HISTORY_ENTITLEMENTS"
 # Sign inside-out (NOT --deep). Sparkle ships nested helpers — XPC services, Updater.app,
 # and the Autoupdate tool — that each need their own hardened-runtime signature. `--deep`
 # signs them with the app's identity but not correctly (Sparkle explicitly forbids it), so
@@ -54,17 +59,24 @@ if [[ -d "$SPARKLE" ]]; then
   codesign --force --options runtime --timestamp --sign "$IDENTITY" "$SPARKLE"
 fi
 
-codesign --force --options runtime --timestamp --sign "$IDENTITY" \
-  "$APP/Contents/MacOS/HarnessDaemon" \
-  "$APP/Contents/MacOS/harness-cli" \
-  "$APP/Contents/MacOS/Harness"
+# codesign does not expand Xcode entitlement variables. Derive the access-group
+# prefix from supplied signing metadata before signing every cooperating component.
+for component in HarnessSessionHost HarnessDaemon harness-cli; do
+  codesign --force --options runtime --timestamp --entitlements "$HISTORY_ENTITLEMENTS/$component.plist" \
+    --sign "$IDENTITY" "$APP/Contents/Helpers/$component.app"
+done
 # Seal the app bundle last (no --deep — nested code is already signed above).
-codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
+codesign --force --options runtime --timestamp --entitlements "$HISTORY_ENTITLEMENTS/Harness.plist" --sign "$IDENTITY" "$APP"
 
 # Verify the whole bundle (nested helpers + app) before we go any further — a broken nested
 # signature can pass signing yet fail notarization/Gatekeeper later, so catch it here.
 echo "Verifying signatures..."
 codesign --verify --deep --strict --verbose=2 "$APP"
+
+if [[ "$SIGN_ONLY" == "1" ]]; then
+  echo "Signed only (notarization skipped via --sign-only / ad-hoc identity)."
+  exit 0
+fi
 
 NOTARY_AUTH=()
 if [[ -n "${ASC_ISSUER_ID:-}" ]]; then
@@ -77,10 +89,6 @@ elif [[ -n "${APPLE_ID:-}" && -n "${APPLE_TEAM_ID:-}" && -n "${APPLE_APP_PASSWOR
   NOTARY_AUTH=(--apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD")
   echo "Notarizing with Apple ID $APPLE_ID (team $APPLE_TEAM_ID)."
 else
-  if [[ "$SIGN_ONLY" == "1" ]]; then
-    echo "Signed only (notarization skipped via --sign-only / ad-hoc identity)."
-    exit 0
-  fi
   cat >&2 <<'MSG'
 ERROR: notarization credentials missing. A distributed build MUST be notarized.
 Set EITHER:

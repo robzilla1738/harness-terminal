@@ -4,9 +4,15 @@
 
 The native macOS terminal that keeps your sessions running and tells you the moment a coding agent needs you.
 
-Every pane renders on Harness's own GPU engine. Your splits and sessions live in a background daemon, so they can survive quitting the app when persistence is enabled — and retained scrollback can be replayed after a daemon restart. You can drive or attach to them from the command line, including a headless or remote daemon over SSH. And Harness watches the agents you run inside it (Claude Code, Codex, Cursor, and more), with optional hooks and program reports to surface requests for attention behind other tabs.
+Terminal panes render on Harness's own GPU engine. A stable session host owns shells and PTYs, while a replaceable daemon manages workspaces and application services. Sessions survive quitting the app when persistence is enabled, and compatible daemon replacement keeps their programs and terminal streams running. You can drive or attach to them from the command line, including a headless or remote daemon over SSH. And Harness watches the agents you run inside it (Claude Code, Codex, Cursor, and more), with optional hooks and program reports to surface requests for attention behind other tabs.
 
-One self-contained app. The terminal engine, daemon, and CLI are first-party Swift. Sparkle is the only Swift package dependency, and only the GUI links it. Lua 5.1 is vendored and linked by the CLI alone. The daemon does not link Lua.
+One self-contained app. The terminal engine, daemon, and CLI are first-party Swift. Sparkle is linked only by the GUI. The official Swift MCP SDK and its pinned support libraries are isolated to the CLI’s MCP integration; Swift TOML supports format-aware configuration edits. Lua 5.1 is vendored and linked by the CLI alone. The daemon does not link Lua or MCP. See [architecture and provenance](docs/ARCHITECTURE-AND-PROVENANCE.md) for dependency boundaries.
+
+## Source and downloads
+
+This README describes the current `main` source. The changes listed under
+[Unreleased](CHANGELOG.md#unreleased) are available to build from source; the
+existing download remains Harness 2.1.0. Updating `main` does not publish a release.
 
 ## Download
 
@@ -27,7 +33,7 @@ Prefer to build it yourself? Jump to [Build from source](#build-from-source).
 ## Why Harness
 
 - **It's a real terminal first.** GPU rendering, accurate sRGB color by default, opt-in converted Display-P3 vivid color, ligatures, native color emoji, inline images (Sixel / Kitty / iTerm2), and 514 bundled themes, including 25 original Harness palettes and black and light defaults. Block and box-drawing glyphs are drawn procedurally, so borders tile without seams at any font.
-- **Your work outlives the window.** Sessions, tabs, and splits are owned by a daemon. Quit and reopen to resume them, scrollback included. Retained output and its resize history are persisted for replay after a daemon restart. Older logs use the legacy replay path; see the [restoration limits](docs/RELEASE-READINESS-2026-10-09.md). Attach the same session from a second window or another machine.
+- **Your work outlives the window.** A stable session host owns shells and their PTYs while a replaceable daemon manages application services. Quit and reopen to attach to preserved programs. Compatible daemon replacement retains their process identities and terminal streams; host failure and reboot require restoration, not live-process survival. See [survival and update behavior](docs/SESSION-SERVICE-UPDATES.md). Attach the same session from a second window or another machine.
 - **It's scriptable, locally or remotely.** `harness-cli` drives the whole thing — open tabs, send keys, capture a pane, resize, swap, zoom — so your tooling can build the layout it needs. Point any command at a headless or remote daemon with `--host <name>`; the daemon and CLI run on Linux too, so a remote box can host your sessions.
 - **It watches your agents.** Harness detects Claude Code, Codex, Cursor, and others by their process tree, shows which session is running what, and pings you when an agent stops or asks for approval. `Cmd+Shift+U` jumps you to the one that's waiting and skips the ones still thinking.
 
@@ -42,11 +48,19 @@ Harness ranges from a plain, get-out-of-your-way terminal to a full session mana
 
 These are presets: the **Keep sessions running** setting and per-session pins determine actual quit behavior. See [Experience modes](docs/MODES.md).
 
-New installs start in Persistent: the quiet look, and sessions survive quitting. An existing settings file that never stored a mode stays Full, so an upgrade does not hide the prefix or the status line. Moving over from another setup? See [docs/MIGRATION.md](docs/MIGRATION.md) — Harness can import an existing terminal config (colors, font, padding) on first run.
+New installs start in Persistent with Harness Graphite, 85% opacity, 60 pt blur, 25% window border opacity, and the bottom status strip off. Tab gaps and pane borders use 8 pt spacing. Sessions survive quitting. An existing settings file that never stored a mode stays Full, so an upgrade does not hide the prefix or the status line. Moving over from another setup? See [docs/MIGRATION.md](docs/MIGRATION.md) — Harness offers a reviewed import of an existing terminal config (colors, font, padding); it preserves the new-install defaults until you apply an import.
 
 ## Workspace workflows
 
-**Session → Activity**, **Saved Setups**, **Recently Closed**, and **Search All Sessions** bring ongoing work together across attached hosts. The command palette also exposes these actions. See [Workspace workflows](docs/WORKSPACE-WORKFLOWS.md) for behavior, limits, and CLI examples.
+**Session → Activity**, **Saved Setups**, **Recently Closed**, and **Search All Sessions** bring ongoing work together across attached hosts. The command palette and **Settings → Tools** also expose these actions. See [Workspace workflows](docs/WORKSPACE-WORKFLOWS.md) for behavior, limits, and CLI examples.
+
+## Development workflows
+
+The Overview Board combines agent attention, usage freshness and process resources across attached hosts. Durable run history, tool anchors and deterministic digests share the same activity ledger. See [activity and search](docs/ACTIVITY-AND-SEARCH.md). Optional [AI summaries](docs/AI-SUMMARIES.md) use explicitly configured providers and content consent; basic digests remain available without AI.
+
+[Managed worktrees](docs/MANAGED-WORKTREES.md), [fan-out](docs/FAN-OUT.md), [schedules](docs/SCHEDULING.md) and [hook policies](docs/HOOK-POLICY.md) have local configuration and recovery flows. [Preview panes and remote connectivity](docs/PREVIEW-AND-REMOTE.md), [recording review](docs/RECORDINGS.md), [importers](docs/IMPORTERS.md), [notifications and power](docs/NOTIFICATIONS-AND-POWER.md), [MCP](docs/MCP.md), and [trusted local plugins](docs/LOCAL-PLUGINS.md) document their opt-ins and limits.
+
+History is encrypted on macOS when signed components can access their Keychain key. If access is unavailable, capture stays in bounded memory and the app reports unavailable history. Linux uses explicitly documented owner-only plaintext storage. [Linux packaging](docs/LINUX-PACKAGING.md) and [installation lifecycle](docs/INSTALLATION-LIFECYCLE.md) describe verified archives, atomic installation and guarded service changes. The [implementation checklist](docs/DEVELOPMENT-IMPLEMENTATION.md) records remaining acceptance work; a source build alone does not establish completed native verification.
 
 ## Features
 
@@ -66,7 +80,7 @@ New installs start in Persistent: the quiet look, and sessions survive quitting.
 - Color/theme diagnostics from the CLI: `harness-cli color-check` and `harness-cli theme-preview --theme <name>` print deterministic SGR pages for eyeballing fidelity in Harness itself
 - Command set: `send-keys`, `capture-pane`, `kill-pane`, `resize-pane`, `zoom-pane`, `swap-pane`, `rename-tab`, `attach`, `find-window`, `kill-server`, `start-server`, `respawn-window`, `refresh-client`, and more
 - Command prefix keymap (default `Ctrl-A`) with a live cheatsheet (prefix `?`)
-- Detection and sourced identities for 23 coding CLIs, including Claude Code, Codex, Cursor, Gemini, Copilot, Amp, Aider, OpenCode, Pi, and more. Compact fixed-brand badges replace agent color customization; see the [complete identity catalog and source notices](Apps/Harness/Resources/AgentLogos/README.md). Detection is separate from per-tool hook support
+- Detection and sourced identities for 37 coding CLIs, including Claude Code, Codex, Cursor, Gemini, Copilot, Amp, Aider, OpenCode, Pi, and more. Uniform monochrome marks on transparent backgrounds replace agent color customization; see the [complete identity catalog and source notices](Apps/Harness/Resources/AgentLogos/README.md). Detection is separate from per-tool hook support; see the [verified CLI commands and capability boundaries](docs/CODING-CLI-SUPPORT.md)
 - Agent alerts as desktop notifications and a notification bell, with a switch per event in Settings ▸ Notifications (needs you, finished, failed, bell, long command finished); `Cmd+Shift+U` jumps to whoever is waiting
 - One-line hook install: `harness-cli install-hooks <agent>`
 - Command palette (`Cmd+K`) and a native macOS Settings window (`Cmd+,`)
@@ -85,7 +99,7 @@ New installs start in Persistent: the quiet look, and sessions survive quitting.
 
 ## harness-cli
 
-Harness launches its daemon automatically; the CLI talks to it.
+Harness starts or adopts the session host and compatible daemon automatically; the CLI uses their public control socket.
 
 ```bash
 harness-cli list-surfaces
@@ -114,8 +128,8 @@ On a fresh install, `Harness.app` opens a one-shot first-run tour (Welcome → O
 Notifications → Command line → Ready; reopen it from Help ▸ Welcome to Harness). Its
 Notifications step offers permission and agent-hook installation as separate optional
 actions. Skipping setup never prompts later just because an agent event arrives. Its optional Command line step performs the same local installation:
-it copies `harness-cli` and `HarnessDaemon`, registers the LaunchAgent only when none is
-working (so the daemon your sessions run in keeps running), adds a PATH block with a backup
+it atomically installs the CLI, daemon, and session-host helper bundles, stages service
+updates while sessions are live, adds a PATH block with a backup
 to the shells you use (your login shell plus any shell that already has a profile), and
 writes fish completions when fish is one of them. It respects `ZDOTDIR` and
 `XDG_CONFIG_HOME`, preserves existing bash login profiles and dotfile symlinks, and reports
@@ -149,7 +163,7 @@ Pass extra SSH options (port, identity file, jump host) with `--ssh-arg`, e.g.
 
 ### Connect an iPhone or iPad
 
-With SSH enabled and Harness 2.1 or later installed, enter `/remote` in Harness’s command prompt or choose **Connect Phone or iPad** in the command palette. In a shell, run `harness-cli pair`. Scan the compact QR code in the [native iOS companion](https://github.com/robzilla1738/harness-ios), verify the computer, and enter your account password once to install a device key. The code contains public metadata only.
+With SSH enabled and Harness 2.1 or later installed, enter `/remote` in Harness’s command prompt or choose **Connect Phone or iPad** in the command palette. In a shell, run `harness-cli pair`. A compatible private [native iOS companion](https://github.com/robzilla1738/harness-ios) scans the compact QR code, verifies the computer and uses SSH authentication. Device keys require approval locally on the host with `harness-cli mobile-key install --stdin`; remote key installation is unsupported. The code contains public metadata only.
 
 The Mac pairing window offers discovered LAN addresses, connected Tailscale addresses, **Set Up Tailscale**, and **Refresh**. Use the same tailnet on both devices for access away from home; ordinary SSH/Remote Login permissions still apply. Custom addresses and ports use `harness-cli pair --host reachable-hostname --port 22`. See [mobile connection and troubleshooting details](docs/MOBILE-BRIDGE.md#pairing-and-files).
 

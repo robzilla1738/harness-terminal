@@ -62,6 +62,86 @@ final class RealPtyLifecycleTests: XCTestCase {
         XCTAssertFalse(output.snapshot.localizedCaseInsensitiveContains("broken pipe"), "SIGPIPE is not ignored in the pane")
     }
 
+    func testFinalOutputReachesSubscribersBeforeExitNotification() throws {
+        let pty = try RealPty(id: UUID().uuidString, cwd: "/tmp", shell: "/bin/sh", rows: 24, cols: 80, scrollbackBytes: 128 * 1024, launchArgumentsOverride: ["-c", "printf 'FINAL_TAIL_OUTPUT'; exit 7"])
+        defer { pty.close() }
+        let accumulated = OutputAccumulator(), exited = expectation(description: "Final output delivered before exit")
+        _ = pty.subscribe { data, _ in _ = accumulated.appendAndContains(String(decoding: data, as: UTF8.self), marker: "") }
+        pty.onExit = { status in
+            XCTAssertTrue(accumulated.contains("FINAL_TAIL_OUTPUT"))
+            XCTAssertEqual(status, 7)
+            exited.fulfill()
+        }
+        pty.start(); wait(for: [exited], timeout: 8)
+    }
+
+    func testPreparedWorkloadReceivesPipeEOFAndCannotBeResubmittedByTerminalInputOrRespawn() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("hstdin-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gate = root.appendingPathComponent("finish")
+        let input = Data(String(repeating: "PRIVATE_PROMPT_✓\n", count: 1500).utf8)
+        let script = """
+        test -t 1 || exit 90
+        test ! -t 0 || exit 91
+        count=$(wc -c | tr -d ' ')
+        printf 'INPUT_BYTES_%s\\nTURN_COMPLETED_PROCESS_STILL_RUNNING\\n' "$count"
+        while [ ! -f "$1" ]; do sleep 0.01; done
+        printf 'WORKLOAD_EXIT_TAIL\\n'
+        exit 7
+        """
+        let pty = try RealPty(id: UUID().uuidString, cwd: root.path, shell: "/bin/sh", rows: 24, cols: 80, launchArgumentsOverride: ["-c", script, "sh", gate.path], initialStandardInput: input)
+        defer { pty.close() }
+        let output = OutputAccumulator(), ended = expectation(description: "Actual workload exit follows final output")
+        _ = pty.subscribe { data, _ in _ = output.appendAndContains(String(decoding: data, as: UTF8.self), marker: "") }
+        pty.onExit = { status in
+            XCTAssertTrue(output.contains("WORKLOAD_EXIT_TAIL")); XCTAssertEqual(status, 7); ended.fulfill()
+        }
+        pty.start()
+        XCTAssertTrue(waitUntil(timeout: 5) { output.contains("TURN_COMPLETED_PROCESS_STILL_RUNNING") })
+        XCTAssertTrue(output.contains("INPUT_BYTES_\(input.count)"))
+        XCTAssertFalse(output.contains("PRIVATE_PROMPT"), "Prepared stdin is not echoed into the terminal")
+        let pid = pty.currentChildPID
+        XCTAssertTrue(pty.childIsAlive, "A conversational turn marker cannot end the workload")
+        XCTAssertFalse(pty.write("DO_NOT_SUBMIT\n")); XCTAssertFalse(pty.respawn(clearHistory: true))
+        XCTAssertEqual(pty.currentChildPID, pid); XCTAssertTrue(pty.childIsAlive)
+        try Data().write(to: gate)
+        wait(for: [ended], timeout: 5)
+    }
+
+    func testClosedOutputDoesNotRetireAStillRunningProcessAndCloseReapsAfterSurfaceRelease() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("houtput-eof-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gate = root.appendingPathComponent("finish"), ready = root.appendingPathComponent("ready")
+        let script = """
+        trap '' HUP
+        cat >/dev/null
+        exec 1>&- 2>&-
+        touch "$1"
+        while [ ! -f "$2" ]; do sleep 0.01; done
+        exit 7
+        """
+        let pty = try RealPty(id: UUID().uuidString, cwd: root.path, shell: "/bin/sh", launchArgumentsOverride: ["-c", script, "sh", ready.path, gate.path], initialStandardInput: Data())
+        defer { pty.close() }
+        let ended = expectation(description: "Only actual process exit retires the workload")
+        pty.onExit = { status in XCTAssertEqual(status, 7); ended.fulfill() }
+        pty.start()
+        XCTAssertTrue(waitUntil(timeout: 3) { FileManager.default.fileExists(atPath: ready.path) })
+        Thread.sleep(forTimeInterval: 0.6) // Exceeds the former incorrect EOF-to-exit poll.
+        XCTAssertTrue(pty.childIsAlive); XCTAssertEqual(pty.ownedChildCount, 1)
+        XCTAssertGreaterThan(pty.currentChildPID, 0)
+        try Data().write(to: gate); wait(for: [ended], timeout: 4)
+        XCTAssertEqual(pty.ownedChildCount, 0)
+
+        var released: RealPty? = try RealPty(id: UUID().uuidString, cwd: root.path, shell: "/bin/sh", launchArgumentsOverride: ["-c", "trap '' TERM HUP; touch \"$1\"; while true; do sleep 1; done", "sh", root.appendingPathComponent("trap-ready").path])
+        released?.start()
+        XCTAssertTrue(waitUntil(timeout: 3) { FileManager.default.fileExists(atPath: root.appendingPathComponent("trap-ready").path) })
+        let pid = try XCTUnwrap(released?.currentChildPID)
+        released?.close(); released = nil
+        XCTAssertTrue(waitUntil(timeout: 5) { kill(pid, 0) != 0 }, "The ownership token must still escalate and reap after the terminal object has been released")
+    }
+
     func testOnExitFiresWhenShellExits() throws {
         let pty = try makePty()
         let exited = expectation(description: "child exited")
@@ -154,8 +234,15 @@ final class RealPtyLifecycleTests: XCTestCase {
         XCTAssertEqual(started.wait(timeout: .now() + 5), .success)
         try Data().write(to: trigger)
         XCTAssertTrue(waitUntil { FileManager.default.fileExists(atPath: trigger.path + ".sent") })
+        let output = OutputAccumulator(), exited = expectation(description: "Explicit close delivers unread tail before exit")
+        _ = pty.subscribe { data, _ in _ = output.appendAndContains(String(decoding: data, as: UTF8.self), marker: "") }
+        pty.onExit = { _ in
+            XCTAssertTrue(output.contains("FINAL_UNREAD_OUTPUT"))
+            exited.fulfill()
+        }
         pty.close()
         gate.signal()
+        wait(for: [exited], timeout: 5)
         XCTAssertTrue(waitUntil(timeout: 2) { pty.replay(fromSequence: nil).contains("FINAL_UNREAD_OUTPUT") },
                       "an exited process's last bytes must survive cancellation of its read source")
     }

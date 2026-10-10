@@ -552,6 +552,26 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertTrue(settings.copyOnSelect)
     }
 
+    func testFirstLaunchKeepsHarnessAppearanceWhenAnotherTerminalIsConfigured() throws {
+        try withTemporaryHarnessHome { _ in
+            try HarnessPaths.ensureDirectories()
+            let imported = ImportedTerminalConfig(
+                backgroundOpacity: 0.4, backgroundBlur: 8,
+                systemLightThemeName: "Tango Adapted",
+                systemDarkThemeName: "TokyoNight Storm"
+            )
+            for _ in 0..<2 {
+                let settings = HarnessSettings.load(imported: imported)
+                XCTAssertEqual(settings.appearanceMode, .theme)
+                XCTAssertEqual(settings.systemDarkThemeName, "Harness Graphite")
+                XCTAssertEqual(settings.backgroundOpacity, 0.85, accuracy: 0.0001)
+                XCTAssertEqual(settings.backgroundBlur, 60)
+                XCTAssertEqual(settings.windowBorderOpacity, 0.25)
+                XCTAssertNil(settings.customBackgroundHex)
+            }
+        }
+    }
+
     func testImportedSplitThemesSeedMacOSSystemAppearance() {
         let imported = ImportedTerminalConfig(
             systemLightThemeName: "Tango Adapted",

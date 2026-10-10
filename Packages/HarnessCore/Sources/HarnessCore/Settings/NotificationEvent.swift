@@ -11,6 +11,7 @@ import Foundation
 public enum NotificationEvent: String, CaseIterable, Codable, Sendable {
     /// An agent or program is blocked on the user: an OSC 7501 `blocked` report, the explicit
     /// `harness-cli notify` path, or a program's own desktop-notification request.
+    case systemSleep, systemWake
     case agentWaiting
     /// Work finished: an OSC 7501 `done` report, or a detected agent going quiet (the
     /// working → idle/awaiting edge).
@@ -26,6 +27,8 @@ public enum NotificationEvent: String, CaseIterable, Codable, Sendable {
     /// Settings-row label.
     public var title: String {
         switch self {
+        case .systemSleep: return "System sleep"
+        case .systemWake: return "System wake"
         case .agentWaiting: return "Needs you"
         case .agentFinished: return "Finished"
         case .failed: return "Failed"
@@ -37,6 +40,8 @@ public enum NotificationEvent: String, CaseIterable, Codable, Sendable {
     /// Settings-row hint shown under the label.
     public var detail: String {
         switch self {
+        case .systemSleep: return "Best-effort notification before macOS sleeps; local execution pauses."
+        case .systemWake: return "macOS woke; elapsed sleep is reported when observed."
         case .agentWaiting: return "An agent or program is waiting for your input or approval."
         case .agentFinished: return "An agent stops working, or a program reports it's done."
         case .failed: return "A program reports an error."
@@ -50,7 +55,7 @@ public enum NotificationEvent: String, CaseIterable, Codable, Sendable {
     public var defaultEnabled: Bool {
         switch self {
         case .agentWaiting, .agentFinished, .failed, .bell: return true
-        case .commandFinished: return false
+        case .commandFinished, .systemSleep, .systemWake: return false
         }
     }
 }

@@ -4,6 +4,7 @@ public struct SetupPane: Codable, Sendable, Equatable {
     public var directory: String
     public var shell: String?
     public var startupCommand: String?
+    public var content: PaneContent?
 }
 
 public indirect enum SetupLayout: Codable, Sendable, Equatable {
@@ -13,7 +14,7 @@ public indirect enum SetupLayout: Codable, Sendable, Equatable {
     public init(_ node: PaneNode, defaultDirectory: String) {
         switch node {
         case let .leaf(leaf):
-            self = .pane(SetupPane(directory: leaf.cwd ?? defaultDirectory, shell: leaf.shell))
+            self = .pane(SetupPane(directory: leaf.cwd ?? defaultDirectory, shell: leaf.shell, content: leaf.content))
         case let .branch(direction, ratio, first, second):
             self = .split(direction: direction, ratio: ratio,
                           first: SetupLayout(first, defaultDirectory: defaultDirectory),
@@ -32,7 +33,7 @@ public indirect enum SetupLayout: Codable, Sendable, Equatable {
         switch self {
         case let .pane(pane):
             var leaf = PaneLeaf(cwd: pane.directory)
-            leaf.shell = pane.shell
+            leaf.shell = pane.shell; leaf.content = pane.content
             return .leaf(leaf)
         case let .split(direction, ratio, first, second):
             return .branch(direction: direction, ratio: ratio, first: first.makePaneTree(), second: second.makePaneTree())
@@ -43,6 +44,14 @@ public indirect enum SetupLayout: Codable, Sendable, Equatable {
         guard depth < 16 else { throw SetupError.invalid("The layout is too deeply nested.") }
         switch self {
         case let .pane(pane):
+            if let content = pane.content {
+                switch content {
+                case .terminal: break
+                case let .preview(specification): _ = try specification.validatedURL()
+                case .unsupported: throw PreviewError.unsupported
+                }
+                if !content.isTerminal, pane.startupCommand != nil || pane.shell != nil { throw SetupError.invalid("Preview panes cannot contain shell startup commands or executable shells.") }
+            }
             guard pane.directory.hasPrefix("/"), !pane.directory.contains("\0") else {
                 throw SetupError.invalid("Each pane needs an absolute directory path on its host.")
             }

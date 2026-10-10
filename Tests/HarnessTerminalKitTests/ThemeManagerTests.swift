@@ -219,8 +219,8 @@ final class ThemeManagerTests: XCTestCase {
     func testFreshSettingsResolveGraphiteCanvas() {
         let settings = HarnessSettings()
         XCTAssertEqual(settings.appearanceMode, .theme)
-        XCTAssertEqual(settings.backgroundOpacity, 0.63, accuracy: 0.0001)
-        XCTAssertEqual(settings.backgroundBlur, 16)
+        XCTAssertEqual(settings.backgroundOpacity, 0.85, accuracy: 0.0001)
+        XCTAssertEqual(settings.backgroundBlur, 60)
 
         let canvas = ThemeManager.resolvedCanvas(
             themeName: "Default",

@@ -25,7 +25,7 @@ public enum OnboardingEnvironment {
     public static var detectAgents: () -> [Agent] = { [] }
 
     /// Install notification hooks, preserving a useful error when setup cannot complete.
-    public static var installHooks: (_ agentID: String) throws -> Void = { _ in
+    public static var installHooks: (_ agentID: String) async throws -> Void = { _ in
         throw CocoaError(.featureUnsupported)
     }
 

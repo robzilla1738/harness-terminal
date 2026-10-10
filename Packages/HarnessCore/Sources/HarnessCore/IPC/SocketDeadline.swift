@@ -16,16 +16,17 @@ struct SocketDeadline {
 
     func wait(_ fd: Int32, events: Int16) throws {
         while true {
+            try Task.checkCancellation()
             let now = DispatchTime.now().uptimeNanoseconds
             guard now < end else { throw DaemonClientError.timeout }
-            let milliseconds = Int32(min((end - now + 999_999) / 1_000_000, UInt64(Int32.max)))
+            let milliseconds = Int32(min((end - now + 999_999) / 1_000_000, UInt64(100)))
             var descriptor = pollfd(fd: fd, events: events, revents: 0)
             let result = poll(&descriptor, 1, milliseconds)
             if result > 0 {
                 guard descriptor.revents & Int16(POLLNVAL) == 0 else { throw DaemonClientError.connectionFailed }
                 return
             }
-            if result == 0 { throw DaemonClientError.timeout }
+            if result == 0 { continue }
             if errno != EINTR { throw DaemonClientError.connectionFailed }
         }
     }

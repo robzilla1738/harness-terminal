@@ -1,7 +1,7 @@
 # Agent logo sources
 
-Harness bundles 23 coding-tool identities. Marks are used only to identify their
-respective tools; no affiliation or endorsement is implied. Research: 2026-10-08.
+Harness bundles 37 coding-tool identities. Marks are used only to identify their
+respective tools; no affiliation or endorsement is implied. Research: 2026-10-10.
 
 Original artwork is checked in beside this file. `sources.json` records each URL,
 Git revision where available, SHA-256, license, and official product page.
@@ -9,8 +9,20 @@ Git revision where available, SHA-256, license, and official product page.
 (with the pinned fonttools package installed). It verifies source hashes, extracts
 mark paths, removes favicon backgrounds/filters, and normalizes optical bounds.
 Pi uses the coding agent's press-kit mark, not Inflection's Pi logo. Aider uses
-the glyph from its official pinned-tab favicon. Crush retains its upstream PNG;
-all other marks are vector geometry. No user image data is involved.
+the glyph from its official pinned-tab favicon. Crush, Codebuff, and Abacus AI retain their upstream PNGs;
+all other marks are vector geometry. CodeRabbit uses the rabbit from its official
+wordmark, Warp Oz uses the W from its official pixel favicon, and Muse Code uses
+Meta’s mark from its official documentation. These are source geometry extracts,
+not invented symbols. No user image data is involved.
+
+Devin uses its current official white symbol from devin.ai’s brand kit; the black
+background rectangle is omitted without altering the symbol.
+IBM Bob’s masked helmet contour and eyes are flattened from its original SVG.
+All marks render as white transparent templates, including the three retained
+raster sources. The native renderer removes their dark backing and negative space,
+trims transparent margins, and keeps original shape proportions. Template tint
+follows native foreground contrast in light menus/settings; agent logos have no
+colored badge backgrounds.
 
 Generated geometry is embedded in the executable. Logos are cached at requested
 sizes; there is no network lookup, animation, or shadow in the badge view.
@@ -40,5 +52,19 @@ sizes; there is no network lookup, animation, or shadow in the badge view.
 | droid | [Project](https://factory.ai) | [Source](https://factory.ai/favicon.svg) | Factory brand mark |
 | auggie | [Project](https://www.augmentcode.com) | [Source](https://www.augmentcode.com/favicon.svg) | Augment brand mark |
 | pi | [Project](https://pi.dev/press-kit) | [Source](https://pi.dev/logo.svg) | Pi press kit; MIT site |
+| devin | [Project](https://devin.ai/brand) | [Source](https://devin.ai/assets/brand/logos/devin/symbol-dark.svg) | Devin official brand kit |
+| command-code | [Project](https://commandcode.ai/docs/quickstart) | [Source](https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/commandcode.svg) | MIT (LobeHub) |
+| qoder | [Project](https://docs.qoder.com/cli/overview) | [Source](https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/qoder.svg) | MIT (LobeHub) |
+| antigravity | [Project](https://antigravity.google/docs/getting-started?tab=cli) | [Source](https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/antigravity.svg) | MIT (LobeHub) |
+| junie | [Project](https://junie.jetbrains.com/docs/junie-cli.html) | [Source](https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/junie.svg) | MIT (LobeHub) |
+| codebuddy | [Project](https://www.codebuddy.ai/docs/cli/quickstart) | [Source](https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/codebuddy.svg) | MIT (LobeHub) |
+| bob | [Project](https://bob.ibm.com/docs/shell) | [Source](https://bob.ibm.com/icon.svg?v=1) | IBM Bob brand mark |
+| coderabbit | [Project](https://docs.coderabbit.ai/cli) | [Source](https://coderabbit.ai/images/logo-orange.svg) | CodeRabbit brand mark |
+| oz | [Project](https://docs.warp.dev/agents/cli/oz-cli/) | [Source](https://www.warp.dev/img/logos/warp-pixel-icon.svg) | Warp brand mark |
+| codebuff | [Project](https://www.codebuff.com/docs/help/quick-start) | [Source](https://www.codebuff.com/favicon/apple-touch-icon.png) | Codebuff brand mark |
+| muse | [Project](https://dev.meta.ai/lp/muse-code) | [Source](https://dev.meta.ai/docs/muse-code) | Meta brand mark |
+| minimax-code | [Project](https://github.com/MiniMax-AI/minimax-code) | [Source](https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/minimax.svg) | MIT (LobeHub) |
+| trae | [Project](https://docs.trae.cn/cli_get-started-with-trae-code-cli-2) | [Source](https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/trae.svg) | MIT (LobeHub) |
+| abacus-ai | [Project](https://abacus.ai/help/abacusai-desktop/cli-installation) | [Source](https://abacus.ai/static/h23c4bfa0/icon2/favicon-192.png) | Abacus AI brand mark |
 
 Redistribution license texts are included in `licenses/`. Brand names and marks remain the property of their owners. Website press/favicon assets are included for product identification; their availability is not a grant of general trademark rights.

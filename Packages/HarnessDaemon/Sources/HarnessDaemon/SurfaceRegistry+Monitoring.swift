@@ -18,6 +18,8 @@ extension SurfaceRegistry {
         var sawOutput = false
         var sawBell = false
         var lastOutput = Date()
+        var lastOutputSequence: UInt64 = 1
+        var lastActivityRecordUptime: UInt64 = 0
         /// OSC-aware bell-scan state, carried across PTY chunks (a sequence can split over reads).
         var bellScan: SurfaceRegistry.BellScanState = .normal
         var statusScan = PtyStreamScanner()
@@ -32,12 +34,15 @@ extension SurfaceRegistry {
         var ownerPID: Int?
         var ownerName: String?
         var lastProcessSignature: String?
+        var streamIdentity: String?
+        var openCommand: ShellCommandSpan?
+        var lastCommand: ShellCommandSpan?
     }
 
     /// State for the lightweight bell scan in `noteSurfaceOutput`. A BEL (0x07) is a real terminal
     /// bell only in `normal`; a BEL terminating or inside a string sequence (OSC/DCS/APC/PM/SOS) is
     /// not — most importantly the OSC 133 prompt marks shell integration emits on every prompt.
-    enum BellScanState: Equatable { case normal, esc, string, stringEsc }
+    enum BellScanState: Equatable, Codable, Sendable { case normal, esc, string, stringEsc, oscString, oscStringEsc }
 
     /// Scan `data` for real control-BELs, threading `state` across calls so a sequence split across
     /// chunks is handled. Returns true if a genuine bell (not a string-sequence terminator) was
@@ -52,7 +57,8 @@ extension SurfaceRegistry {
                     else if byte == 0x07 { sawBell = true }
                 case .esc:
                     switch byte {
-                    case 0x5D, 0x50, 0x5F, 0x5E, 0x58: state = .string   // OSC ] / DCS P / APC _ / PM ^ / SOS X
+                    case 0x5D: state = .oscString
+                    case 0x50, 0x5F, 0x5E, 0x58: state = .string   // OSC ] / DCS P / APC _ / PM ^ / SOS X
                     case 0x1B: state = .esc                              // ESC restarts escape parsing
                     case 0x07: sawBell = true; state = .normal           // BEL after a non-string ESC: real
                     default: state = .normal                             // CSI, ST, other escapes
@@ -61,13 +67,19 @@ extension SurfaceRegistry {
                     // A BEL terminates an OSC (xterm) and is data inside the others — never a bell.
                     // CAN/SUB abort a string sequence (as the VT parser does), so an unterminated string
                     // can't pin the scanner and swallow every later bell.
-                    if byte == 0x07 { state = .normal }
-                    else if byte == 0x18 || byte == 0x1A { state = .normal } // CAN / SUB abort
+                    if byte == 0x18 || byte == 0x1A { state = .normal } // CAN / SUB abort
                     else if byte == 0x1B { state = .stringEsc }
                 case .stringEsc:
                     if byte == 0x5C { state = .normal }                  // ST (ESC \) terminates the string
                     else if byte == 0x1B { state = .stringEsc }          // another ESC; keep waiting
                     else { state = .string }                             // ESC was data; stay in the string
+                case .oscString:
+                    if byte == 0x07 || byte == 0x18 || byte == 0x1A { state = .normal }
+                    else if byte == 0x1B { state = .oscStringEsc }
+                case .oscStringEsc:
+                    if byte == 0x5C || byte == 0x07 || byte == 0x18 || byte == 0x1A { state = .normal }
+                    else if byte != 0x1B { state = .oscString }
+
                 }
             }
         }
@@ -130,13 +142,17 @@ extension SurfaceRegistry {
     /// A real OSC 7501 change is published on the follow stream immediately. The 500 ms
     /// monitor tick still paints the tab; the follow line cannot wait for that tick.
     @discardableResult
-    func noteSurfaceOutput(surfaceKey: String, data: Data) -> Data? {
+    func noteSurfaceOutput(surfaceKey: String, data: Data, sequence: UInt64? = nil, replaying: Bool = false) -> Data? {
         monitorLock.lock()
         // Moved out (not copied) so mutating its scanner/status containers doesn't copy-on-write
         // them per chunk; re-inserted below before the lock drops.
         var m = monitors.removeValue(forKey: surfaceKey) ?? SurfaceMonitor()
         m.sawOutput = true
         m.lastOutput = Date()
+        if let sequence { m.lastOutputSequence = sequence + UInt64(data.count) }
+        let nowUptime = DispatchTime.now().uptimeNanoseconds
+        let recordActivity = nowUptime &- m.lastActivityRecordUptime >= 50_000_000
+        if recordActivity { m.lastActivityRecordUptime = nowUptime }
         // Parser-aware bell: a raw `data.contains(0x07)` mistakes the OSC-terminator BEL that shell
         // integration emits on every prompt (OSC 133) for a real terminal bell. The scan threads
         // its state through `m.bellScan` so a sequence spanning chunks is still handled correctly.
@@ -145,32 +161,100 @@ extension SurfaceRegistry {
         var reply: Data?
         var commandExit: Int?
         var side: [FollowEvent] = []
-        var shots: [ProgramStatusBook] = []
+        var shots: [(book: ProgramStatusBook, sequence: UInt64)] = []
         var cursor = before
-        for event in m.statusScan.scan(data) {
+        var explicitNotices: [NotificationNotice] = []
+        var completedCommands: [ShellCommandSpan] = []
+        var overflow = false
+        var scanner = m.statusScan; m.statusScan = PtyStreamScanner()
+        scanner.visit(data, sequence: sequence ?? m.lastOutputSequence) { anchored in
+            let event = anchored.event
+            if case .bell = event, explicitNotices.count < 64 {
+                var notice = NotificationNotice(surfaceID: surfaceKey, event: .bell, title: "Terminal", message: "Bell")
+                if let stream = m.streamIdentity { notice.observationIdentity = stream + ":bell:" + String(anchored.endSequence) }
+                explicitNotices.append(notice)
+            } else if case .bell = event { overflow = true }
             m.modeMirror.apply(event)
             if let text = m.programStatus.apply(scan: event) {
                 reply = Data(text.utf8)
             }
             if m.programStatus != cursor {
-                shots.append(m.programStatus)
+                if shots.count < 512 { shots.append((m.programStatus, anchored.endSequence)) } else { overflow = true }
                 cursor = m.programStatus
             }
-            if case let .osc(code, body, _) = event {
+            if case let .osc(code, body, length) = event {
+                let previousNoticeCount = explicitNotices.count
+                if explicitNotices.count >= 64 && ((code == 9 && body != "4" && !body.hasPrefix("4;")) || (code == 777 && body.hasPrefix("notify;"))) { overflow = true }
+                if length <= ProgramStatusRevision.maxSequenceBytes && explicitNotices.count < 64 {
+                    if code == 9, body != "4", !body.hasPrefix("4;") {
+                        explicitNotices.append(NotificationNotice(surfaceID: surfaceKey, event: .agentWaiting, title: "Terminal", message: body))
+                    } else if code == 777 {
+                        let parts = body.split(separator: ";", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+                        if parts.first == "notify", parts.count >= 2 {
+                            explicitNotices.append(NotificationNotice(surfaceID: surfaceKey, event: .agentWaiting,
+                                title: parts.count >= 3 ? parts[1] : "Terminal", message: parts.count >= 3 ? parts[2] : parts[1]))
+                        }
+                    }
+                }
+                if explicitNotices.count > previousNoticeCount, let stream = m.streamIdentity {
+                    explicitNotices[explicitNotices.count - 1].observationIdentity = stream + ":osc:" + String(anchored.endSequence)
+                }
+                if code == 133, sequence != nil, length <= ProgramStatusRevision.maxSequenceBytes {
+                    let marker = body.split(separator: ";", maxSplits: 1).first
+                    if marker == "C" {
+                        m.openCommand = ShellCommandSpan(surfaceID: surfaceKey, startSequence: anchored.endSequence)
+                        m.openCommand?.streamIdentity = m.streamIdentity
+                        m.openCommand?.observedTiming = !replaying
+                    } else if marker == "D", var span = m.openCommand {
+                        let end = anchored.endSequence >= UInt64(length) ? anchored.endSequence - UInt64(length) : 0
+                        if end >= span.startSequence {
+                            span.endSequence = end
+                            span.exitCode = body == "D" ? nil : ProgramStatusBook.commandExitCode(body).flatMap(Int32.init(exactly:))
+                            m.lastCommand = span
+                            if completedCommands.count < 512 { completedCommands.append(span) } else { overflow = true }
+                        }
+                        m.openCommand = nil
+                    } else if marker == "A" { m.openCommand = nil }
+                }
                 if code == 133, let status = ProgramStatusBook.commandExitCode(body) {
                     commandExit = status
                 }
                 if let extra = followSideEvent(code: code, body: body, pane: surfaceKey, session: m.sessionID, ownerPID: m.ownerPID, ownerName: m.ownerName) {
-                    side.append(extra)
+                    if side.count < 512 { side.append(extra) } else { overflow = true }
                 }
             }
         }
+        if overflow, !shots.isEmpty, shots.last?.book != m.programStatus { shots[shots.count - 1] = (m.programStatus, (sequence ?? m.lastOutputSequence) + UInt64(data.count)) }
+        m.statusScan = scanner
         if m.programStatus != before { m.statusDirty = true }
-        let sessionID = m.sessionID
+        let sessionID = m.sessionID, streamIdentity = m.streamIdentity
         monitors[surfaceKey] = m
         monitorLock.unlock()
+        if overflow { notifications.reportOverflow(); publishObserverFailure("Terminal event capture reached its per-chunk budget; some activity detail and alerts are unavailable.") }
+        for span in completedCommands {
+            activity.recordCommand(span)
+            notifications.commandCompleted(span)
+        }
+        for notice in explicitNotices {
+            if notice.event == .bell {
+                let action = optionStore.get("bell-action")?.stringValue
+                if action != "off" && action != "none" { notifications.submit(notice) }
+                continue
+            }
+            notifications.submit(notice)
+            if let surface = notice.surfaceID {
+                lock.lock()
+                markWaiting(surfaceKey: surface, text: notice.message); noteProgramStatusNotifiedLocked(surface); commit()
+                lock.unlock()
+            }
+        }
+        if recordActivity { AgentDetector.recordActivity(forSurfaceKey: surfaceKey) }
         var prior = before
-        for shot in shots {
+        for anchored in shots {
+            let shot = anchored.book
+            if shot.acceptedRealReport, let root = shot.records[""], root != prior.records[""] {
+                activity.observeOSC(surfaceID: surfaceKey, state: root.state.rawValue, message: root.message, sequence: sequence == nil ? nil : anchored.sequence, streamIdentity: streamIdentity)
+            }
             emitProgramStatusFollow(before: prior, after: shot, pane: surfaceKey, session: sessionID)
             prior = shot
         }
@@ -394,6 +478,9 @@ extension SurfaceRegistry {
         monitorLock.unlock()
         let snoozed = editor.listAttention().first { $0.surfaceID == uuid }?.activity.isSnoozed ?? false
         if let notified, !snoozed {
+            if activity.currentRun(surfaceID: surfaceKey) == nil, let event = ProgramStatusAlerts.event(for: Self.programMark(from: presentation)?.attention ?? .working) {
+                notifications.submit(NotificationNotice(surfaceID: surfaceKey, event: event, title: notified.paneName, message: notified.body))
+            }
             NotificationBus.shared.post(AgentNotification(
                 surfaceID: uuid,
                 daemonSurfaceID: surfaceKey,

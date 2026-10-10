@@ -140,6 +140,11 @@ public struct SurfaceSizeArbiter: Equatable, Sendable {
         }
     }
 
+    /// Includes one-shot control clients that voted without subscribing to output.
+    public func surfaces(for client: Int32) -> Set<String> {
+        Set(votes.compactMap { surface, clients in clients[client] == nil ? nil : surface })
+    }
+
     public func owner(of surface: String) -> Int32? { owners[surface] }
 
     /// The one client that answers terminal queries: the owner, or in `smallest` mode (where

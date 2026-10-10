@@ -266,7 +266,7 @@ public final class TerminalHostView: NSView {
         self.cachedShell = shell
         self.cachedCwd = workingDirectory
         let surfaceEnv = harnessSurfaceEnv ?? surfaceID.uuidString
-        let io = SurfaceIO(surfaceID: surfaceEnv, endpoint: endpoint)
+        let io = SurfaceIO(surfaceID: surfaceEnv)
         self.io = io
         let inputGate = InputGate(io: io, endpoint: endpoint)
         self.inputGate = inputGate
@@ -896,7 +896,8 @@ public final class TerminalHostView: NSView {
 
     /// Toggle the in-pane find bar. Opening focuses its field (keystrokes go to the bar, not
     /// the shell); closing clears highlights and returns focus to the terminal.
-    public func revealSearchResult(_ match: OutputSearchMatch, query: String, caseSensitive: Bool) -> Bool {
+    public func revealSearchResult(_ match: OutputSearchMatch, query: String, caseSensitive: Bool, regex: Bool = false) -> Bool {
+        if regex { hideFind(); return nativeView.revealRegexSearchResult(line: match.line, fingerprint: match.lineFingerprint, span: match.regexSpan) }
         showFind()
         findBar?.setQuery(query, caseSensitive: caseSensitive)
         return nativeView.revealSearchResult(query: query, caseSensitive: caseSensitive, line: match.line, fingerprint: match.lineFingerprint)
@@ -1394,13 +1395,11 @@ private final class DetachedPaneOverlay: NSView {
     override func scrollWheel(with event: NSEvent) {}
 }
 
-/// Serializes a surface's PTY input/resize onto one ordered background queue with a
-/// single reused `DaemonClient`. A fresh client per write on the concurrent global
-/// queue (the old approach) could reorder bytes to the PTY and allocated needlessly;
-/// this keeps writes ordered and off the main thread.
-/// @unchecked Sendable: `DaemonClient` is itself thread-safe and `surfaceID` is immutable.
+/// Serializes PTY input and size votes onto the persistent output connection.
+/// Before attachment, geometry is retained locally and submitted when the stream
+/// is ready; a temporary control socket must not compete with the window's vote.
+/// @unchecked Sendable: mutable state is lock-protected; writes use the serial queue.
 private final class SurfaceIO: @unchecked Sendable {
-    private let client: DaemonClient
     private let queue = DispatchQueue(label: "com.robert.harness.terminal-io")
     private let surfaceID: String
     private let lock = NSLock()
@@ -1414,8 +1413,7 @@ private final class SurfaceIO: @unchecked Sendable {
     private var lastRows: UInt16 = 0
     private var lastCols: UInt16 = 0
     /// Monotonic tag for coalescing live-resize votes: a real-time window drag fires one
-    /// `resize(...)` per cell boundary, and the daemon re-`ioctl`s on every identical size, so a
-    /// fast drag must not storm the IPC socket. Each call bumps this; a queued send drops itself if
+    /// `resize(...)` per cell boundary. Each call bumps this; a queued send drops itself if
     /// a newer call superseded it. Guarded by `lock`.
     private var resizeVoteEpoch: UInt64 = 0
     private static let maxQueuedBytes = 8 * 1024 * 1024
@@ -1424,9 +1422,8 @@ private final class SurfaceIO: @unchecked Sendable {
     private var onError: (@Sendable (String) -> Void)?
     private var lastErrorTime: TimeInterval = 0
 
-    init(surfaceID: String, endpoint: Endpoint = .localControlSocket) {
+    init(surfaceID: String) {
         self.surfaceID = surfaceID
-        self.client = DaemonClient(endpoint: endpoint)
     }
 
     func setErrorHandler(_ handler: @escaping @Sendable (String) -> Void) {
@@ -1497,14 +1494,12 @@ private final class SurfaceIO: @unchecked Sendable {
         lock.unlock()
         // Coalesce a live drag's per-cell-boundary votes: each call bumps the epoch, and the queued
         // send fires only if its epoch is still newest when it runs, reading the freshest size under
-        // the lock. A burst on the IPC socket collapses to the final size — the daemon does not
-        // dedupe identical `TIOCSWINSZ` calls, so the client must — while every DISTINCT settled
-        // size still lands (the per-fd vote is sticky, so the last value wins).
+        // the lock. A burst collapses to the final size without flooding the IPC socket,
+        // while every distinct settled size still lands (the per-fd vote is sticky).
         // Prefer the persistent subscription (mirrors `send`): the daemon keys size votes by fd, so
         // a vote on the subscription holds until detach — a one-shot vote evaporates with its
-        // socket. Before the subscription exists, fall back to the per-call client (apply-then-drop
-        // is correct for a not-yet-attached client).
-        queue.async { [weak self, client, surfaceID] in
+        // socket. Before attachment, retain the latest dimensions; attach submits them.
+        queue.async { [weak self, surfaceID] in
             guard let self else { return }
             self.lock.lock()
             let isLatest = epoch == self.resizeVoteEpoch
@@ -1514,8 +1509,6 @@ private final class SurfaceIO: @unchecked Sendable {
             guard isLatest else { return } // a newer vote superseded this one — drop the duplicate
             if let sub = self.currentSubscription {
                 sub.resize(surfaceID, rows: r, cols: c)
-            } else {
-                _ = try? client.request(.resizeSurface(surfaceID: surfaceID, rows: r, cols: c))
             }
         }
     }

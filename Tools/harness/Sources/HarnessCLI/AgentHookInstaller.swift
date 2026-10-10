@@ -11,7 +11,7 @@ import HarnessCore
 /// "Install hooks" button). This shim only resolves the agent name, calls core, and prints
 /// the same human-facing messages + exit codes the command always had.
 enum AgentHookInstallerCLI {
-    static func run(agentArg: String) {
+    static func run(agentArg: String, dryRun: Bool = false) {
         let trimmed = agentArg.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             fputs("install-hooks: missing agent name (e.g. claude-code, codex, cursor, grok, opencode, pi, hermes, openclaw)\n", harnessStderr)
@@ -28,7 +28,10 @@ enum AgentHookInstallerCLI {
             exit(0)
         }
         do {
-            let result = try AgentHookInstaller.install(agent: kind)
+            let proposed = try AgentHookInstaller.prepare(agent: kind)
+            print(proposed.diff)
+            if dryRun { return }
+            let result = try AgentHookInstaller.apply(proposed)
             if result.needsManualMerge {
                 // We left the file untouched to avoid corrupting an existing config.
                 print("\(kind.displayName): \(result.path.path) already defines a hooks section (or couldn't be edited safely).")
@@ -50,6 +53,8 @@ enum AgentHookInstallerCLI {
                 print("Hermes requires consent: run 'hermes hooks' to approve the new hook before it fires.")
             case .openCode, .pi:
                 print("Takes effect on the agent's next session (plugin/extension auto-loaded).")
+            case .codex:
+                print("Review and approve changed hooks through Codex /hooks. Harness never edits Codex hook approvals.")
             case .cursor:
                 print("Note: Cursor's 'stop' hook is primarily an IDE/Agent-Chat hook; CLI support may vary.")
             default:

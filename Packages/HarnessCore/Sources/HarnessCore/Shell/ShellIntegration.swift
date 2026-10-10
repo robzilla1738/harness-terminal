@@ -109,10 +109,13 @@ public enum ShellIntegration {
         printf '\\033]133;D;%s\\007' "$?"
         printf '\\033]133;A\\007'
       }
+      __harness_preexec() { printf '\\033]133;C\\007'; }
       if (( ${+functions[add-zsh-hook]} )); then
         add-zsh-hook precmd __harness_precmd
+        add-zsh-hook preexec __harness_preexec
       else
-        precmd_functions+=(__harness_precmd)
+        (( ${precmd_functions[(Ie)__harness_precmd]} )) || precmd_functions+=(__harness_precmd)
+        (( ${preexec_functions[(Ie)__harness_preexec]} )) || preexec_functions+=(__harness_preexec)
       fi
     fi
     """
@@ -126,10 +129,30 @@ public enum ShellIntegration {
       __harness_precmd() {
         printf '\\001\\033]133;D;%s\\007\\002' "$?"
       }
-      case ";${PROMPT_COMMAND};" in
-        *";__harness_precmd;"*) : ;;
-        *) PROMPT_COMMAND="__harness_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
-      esac
+      __harness_pc_decl=$(declare -p PROMPT_COMMAND 2>/dev/null)
+      if [[ "$__harness_pc_decl" == "declare -a "* ]]; then
+        __harness_pc_found=0
+        for __harness_pc_item in "${PROMPT_COMMAND[@]}"; do
+          [[ "$__harness_pc_item" == __harness_precmd ]] && __harness_pc_found=1
+        done
+        if [[ "$__harness_pc_found" == 0 ]]; then
+          PROMPT_COMMAND=(__harness_precmd "${PROMPT_COMMAND[@]}")
+        fi
+        unset __harness_pc_found __harness_pc_item
+      else
+        case ";${PROMPT_COMMAND};" in
+          *";__harness_precmd;"*) : ;;
+          *) PROMPT_COMMAND="__harness_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
+        esac
+      fi
+      unset __harness_pc_decl
+      # Bash >= 4.4 provides PS0 before command output without replacing DEBUG traps.
+      if (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )); then
+        case "$PS0" in
+          *'133;C'*) : ;;
+          *) PS0=$'\\033]133;C\\007'"$PS0" ;;
+        esac
+      fi
       case "$PS1" in
         *'133;A'*) : ;;
         *) PS1='\\[\\033]133;A\\007\\]'"$PS1" ;;
@@ -149,6 +172,9 @@ public enum ShellIntegration {
     if set -q HARNESS; and test "$TERM" != dumb
         function __harness_osc133_prompt --on-event fish_prompt
             printf '\\033]133;A\\007'
+        end
+        function __harness_osc133_preexec --on-event fish_preexec
+            printf '\\033]133;C\\007'
         end
         function __harness_osc133_postexec --on-event fish_postexec
             printf '\\033]133;D;%s\\007' $status

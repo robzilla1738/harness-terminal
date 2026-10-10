@@ -39,7 +39,7 @@ enum CommandPaletteController {
     private static var panel: NSPanel?
     /// MRU stack of action IDs the user has just run. Persisted across launches so
     /// the palette feels like it learns from the user.
-    private static let recentDefaultsKey = "com.robert.harness.palette.recent"
+    private static var recentDefaultsKey: String { UIStateDefaults.key("com.robert.harness.palette.recent") }
     private static let recentLimit = 5
 
     static func present(relativeTo parent: NSWindow?) {
@@ -473,6 +473,37 @@ enum CommandPaletteController {
             })
         }
 
+        actions.append(PaletteAction(id: "action.hookPolicy", title: "Trusted Hook Policy…", subtitle: "Review literal deny/ask rules, provider support and redacted audit", symbol: "shield.lefthalf.filled", shortcut: "", section: .settings) { coordinator.presentHookPolicy() })
+        actions.append(PaletteAction(id: "action.historyPrivacy", title: "History and Privacy…", subtitle: "Host or pane capture, encryption status, and Keychain recovery", symbol: "lock.shield", shortcut: "", section: .settings) { coordinator.presentHistoryPrivacy() })
+        actions.append(PaletteAction(id: "action.schedules", title: "Schedules…", subtitle: "Explicit local execution, timezone, occurrences and cancellation", symbol: "calendar.badge.clock", shortcut: "", section: .actions) { coordinator.presentSchedules() })
+        actions.append(PaletteAction(id: "action.aiSummaries", title: "Optional AI Summaries…", subtitle: "Reviewed providers, current models, content consent and cancellation", symbol: "text.bubble", shortcut: "", section: .actions) { coordinator.presentAISummaries() })
+        actions.append(PaletteAction(id: "action.importTmux", title: "Import tmux Layout…", subtitle: "Preview stable layouts and save without acquiring PTYs", symbol: "rectangle.split.2x2", shortcut: "", section: .actions) { coordinator.presentTmuxImport() })
+        actions.append(PaletteAction(id: "action.importITerm", title: "Import iTerm2 Colors…", subtitle: "Preview a base/dark/light preset before installing or applying", symbol: "paintpalette", shortcut: "", section: .settings) { ThemeImportController.presentITermImport() })
+        actions.append(PaletteAction(id: "action.recordings", title: "Recordings and Export…", subtitle: "Record a terminal, review masks and save a plaintext asciicast", symbol: "record.circle", shortcut: "", section: .actions) { coordinator.presentRecordings() })
+        actions.append(PaletteAction(id: "action.preview", title: "Open Preview…", subtitle: "A loopback development page beside the selected pane", symbol: "globe", shortcut: "", section: .actions) { coordinator.presentPreview() })
+        actions.append(PaletteAction(id: "action.fanout", title: "Fan-out…", subtitle: "Launch providers at one pinned base, inspect outcomes and compare work", symbol: "arrow.triangle.branch", shortcut: "", section: .actions) { coordinator.presentFanout() })
+        actions.append(PaletteAction(id: "action.managedWorktrees", title: "Managed Worktrees…", subtitle: "Create pinned worktrees, compare repository state and clean up safely", symbol: "arrow.triangle.branch", shortcut: "", section: .actions) { coordinator.presentManagedWorktrees() })
+        actions.append(PaletteAction(id: "plugins.review", title: "Review and trust local Lua plugin…", subtitle: "Review declarative metadata and entry code before enabling actions", symbol: "checkmark.shield", shortcut: "", section: .settings) {
+            PluginTrustController.review(relativeTo: NSApp.keyWindow)
+        })
+        do {
+            for plugin in try TrustedPlugins.load() {
+                for entry in plugin.manifest.actions {
+                    actions.append(PaletteAction(id: "plugin." + plugin.id + "." + entry.id, title: entry.title, subtitle: plugin.manifest.title + " · " + (entry.detail ?? "Explicitly trusted local Lua entry"), symbol: "puzzlepiece.extension", shortcut: "", section: .actions) {
+                        ScriptActionRunner.run(.plugin(id: plugin.id, action: entry.id), origin: .palette, surface: coordinator.activeSurfaceID?.uuidString) { result in
+                            DispatchQueue.main.async { MainActor.assumeIsolated { SessionCoordinator.applyScriptResult(result) } }
+                        }
+                    })
+                }
+                actions.append(PaletteAction(id: "plugins.revoke." + plugin.id, title: "Revoke trust: " + plugin.manifest.title, subtitle: "Remove this plugin's palette actions", symbol: "minus.circle", shortcut: "", section: .settings, searchOnly: true) { PluginTrustController.revoke(plugin.id) })
+            }
+        } catch {
+            let message = error.localizedDescription
+            actions.append(PaletteAction(id: "plugins.failure", title: "Trusted plugins unavailable", subtitle: message, symbol: "exclamationmark.triangle", shortcut: "", section: .settings) {
+                let alert = NSAlert(); alert.messageText = "Trusted plugin registry could not be read"; alert.informativeText = message; alert.runModal()
+            })
+        }
+
         ScriptActionRunner.syncManifest()
         for action in ScriptStore.load()?.actions ?? [] {
             let row = ScriptPalette.rows(actions: [action])[0]
@@ -575,6 +606,7 @@ enum CommandPaletteController {
     private static func menuActions() -> [PaletteAction] {
         var found: [PaletteAction] = []
         func walk(_ menu: NSMenu, path: [String]) {
+            if menu.title == "Remote" { menu.delegate?.menuNeedsUpdate?(menu) }
             menu.update()
             for item in menu.items where !item.isSeparatorItem && !item.isHidden && !item.title.isEmpty {
                 if let submenu = item.submenu {
@@ -592,8 +624,7 @@ enum CommandPaletteController {
                     symbol: "filemenu.and.selection",
                     shortcut: shortcutText(item),
                     section: .commands
-                ) { [weak item] in
-                    guard let item else { return }
+                ) {
                     NSApp.sendAction(action, to: target, from: item)
                 })
             }

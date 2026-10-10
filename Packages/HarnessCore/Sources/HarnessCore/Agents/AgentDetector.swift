@@ -206,6 +206,24 @@ public enum AgentDetector {
         return result
     }
 
+    public static func ancestorAgent(pid: Int32, root: Int32, provider: AgentKind,
+                                     table: AgentTable, parents: [Int32: Int32], allowRoot: Bool = false) -> Int32? {
+        var cursor = pid
+        for _ in 0..<64 {
+            guard cursor > 0, cursor != root || allowRoot else { return nil }
+            if let path = pidPath(cursor), let arguments = processArguments(cursor),
+               table.entries.contains(where: { $0.kind == provider && $0.matchesProcess(resolvedExecutable: path, arguments: arguments) }) { return cursor }
+            guard cursor != root, let parent = parents[cursor], parent != cursor else { return nil }; cursor = parent
+        }
+        return nil
+    }
+    public static func launchSpecification(pid: Int32, provider: AgentKind, generation: String,
+                                           directory: String, profile: String, environment: [String: String]) -> AgentLaunchSpecification? {
+        guard ProcessScan.generation(pid) == generation, let executable = pidPath(pid), let arguments = processArguments(pid),
+              ProcessScan.generation(pid) == generation else { return nil }
+        return AgentResume.launch(executable: executable, arguments: arguments, provider: provider,
+            directory: directory, profile: profile, environment: environment)
+    }
     private static func pidPath(_ pid: Int32) -> String? {
         #if canImport(Darwin)
         var buffer = [UInt8](repeating: 0, count: Int(MAXPATHLEN))
@@ -233,7 +251,7 @@ public enum AgentDetector {
         #if canImport(Darwin)
         var size = 0
         var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
-        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size, size <= 1 << 20 else { return nil }
         var buffer = [UInt8](repeating: 0, count: size)
         guard buffer.withUnsafeMutableBufferPointer({ ptr -> Int32 in
             sysctl(&mib, 3, ptr.baseAddress, &size, nil, 0)
@@ -337,6 +355,14 @@ public struct AgentTableEntry: Codable, Sendable {
         "@earendil-works/pi-coding-agent/dist/bundle/cli.js": "pi",
         "@mariozechner/pi-coding-agent/dist/cli.js": "pi",
         "@anthropic-ai/claude-code/cli.js": "claude",
+        "@abacus-ai/cli/scripts/npm-wrapper/shim.cjs": "abacusai",
+        "@minimax-ai/code/cli.js": "mcode",
+        "codebuff/index.js": "codebuff",
+        "command-code/dist/index.mjs": "command-code",
+        "@tencent-ai/codebuddy-code/bin/codebuddy": "codebuddy",
+        "@tencent-ai/codebuddy-code/bin/codebuddy-lowmem": "codebuddy",
+        "@qoder-ai/qodercli/bundle/qoder-npm-dispatcher.cjs": "qoder",
+        "@qoder-ai/qodercli/bundle/qodercli.js": "qoder",
     ]
 
     private static func insertLaunchTarget(_ raw: String, into names: inout Set<String>) {
@@ -441,6 +467,12 @@ public struct AgentTableEntry: Codable, Sendable {
     private static func insertProcessName(_ raw: String, into names: inout Set<String>) {
         guard let name = processName(raw) else { return }
         names.insert(name)
+        // Muse's official launcher execs a versioned native binary, replacing
+        // argv[0]. Match its published release grammar, never a loose prefix.
+        if name.hasPrefix("muse-bin-"),
+           name.range(of: #"^muse-bin-[0-9]+\.[0-9]+\.[0-9]+-r[0-9]+(\.[0-9]+)?$"#, options: .regularExpression) != nil {
+            names.insert("muse")
+        }
     }
 
     private static func processName(_ raw: String) -> String? {
@@ -480,6 +512,20 @@ public struct AgentTable: Codable, Sendable {
         AgentTableEntry(kind: .openhands, executables: ["openhands"]),
         AgentTableEntry(kind: .auggie, executables: ["auggie"]),
         AgentTableEntry(kind: .kimi, executables: ["kimi", "kimi-cli", "kimi-code"]),
+        AgentTableEntry(kind: .devin, executables: ["devin"]),
+        AgentTableEntry(kind: .codebuff, executables: ["codebuff", "cb"]),
+        AgentTableEntry(kind: .commandCode, executables: ["command-code", "commandcode", "cmd", "cmdc"]),
+        AgentTableEntry(kind: .qoder, executables: ["qoder", "qodercli"]),
+        AgentTableEntry(kind: .coderabbit, executables: ["coderabbit", "cr"]),
+        AgentTableEntry(kind: .bob, executables: ["bob"]),
+        AgentTableEntry(kind: .muse, executables: ["muse"]),
+        AgentTableEntry(kind: .antigravity, executables: ["agy"]),
+        AgentTableEntry(kind: .junie, executables: ["junie"]),
+        AgentTableEntry(kind: .codebuddy, executables: ["codebuddy", "codebuddy-code", "cbc", "codebuddy-lowmem"]),
+        AgentTableEntry(kind: .oz, executables: ["oz", "oz-preview", "warp-cli"]),
+        AgentTableEntry(kind: .abacus, executables: ["abacusai"]),
+        AgentTableEntry(kind: .minimax, executables: ["mcode"]),
+        AgentTableEntry(kind: .trae, executables: ["traecli"]),
     ])
 
     /// Last decoded `agents.json`, keyed by its modification date, so the ~1.5s scan

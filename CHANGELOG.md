@@ -8,6 +8,39 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 
 ## [Unreleased]
 
+These changes are available on `main`; no new tagged release or downloadable build
+has been published for them.
+
+### Added
+
+- Stable session-host ownership of shells and PTYs, with compatible daemon handover, bounded replay, recovery, and explicit session-preserving update controls.
+- Durable agent execution history, tool timelines, usage accounting, deterministic digests, repository reports, and the Overview Board across attached hosts.
+- Encrypted macOS history with shared Keychain access, interruption-safe migration, unavailable-key recovery, retention controls, and capture opt-out. Linux retains documented owner-only storage.
+- Opt-in notification destinations, quiet hours, mute/snooze, speech, and daemon-owned power management with AC/battery policy.
+- Exact supported-provider resume, recorded command output, and Explain insertion without automatic submission.
+- Official Swift MCP integration with explicit tool permissions, cancellation, pane resources, and trusted local Lua plugins.
+- Managed worktrees and fan-out with pinned bases, actual workload outcomes, comparisons, cancellation, and protected cleanup.
+- Typed preview panes, managed remote forwards, reconnect recovery, and private remote image paste.
+- Reviewed recordings and asciicast export, tmux layout previews, Ghostty shortcut import, iTerm2 color import, process-tree resources, bounded regex search, schedules, and declarative hook policy.
+- Optional AI summaries with reviewed content consent, native provider adapters, current model discovery, cancellation, and deterministic-digest fallback.
+- Reproducible Linux packaging and atomic installer, rollback, signing, and uninstall engineering.
+- Recognition and sourced logos for 37 coding tools, including Devin, Abacus AI, MiniMax Code, and Trae. Advanced hooks, usage, resume, and fan-out remain limited to their verified adapters.
+
+### Changed
+
+- First-run appearance uses Harness Graphite, 85% opacity, 60 pt blur, 25% border opacity, 8 pt tab gaps, and a hidden bottom status strip. Existing explicit choices remain respected.
+- Coding-tool logos use uniform monochrome templates on transparent backgrounds. Devin uses its current official symbol from devin.ai.
+- Main Settings provides access to development tools, with consistent native controls and accessible labels.
+- Tab peek is a compact side panel with smoother presentation and terminal-style content.
+- API metadata declares capabilities, effects, and exposure surfaces; response negotiation preserves older-client compatibility.
+
+### Fixed
+
+- Build differences, failed health probes, and development conveniences no longer authorize terminating live sessions.
+- Terminal size synchronization releases stale client votes and orders attachment sizing so coding TUIs receive the available grid size.
+- Recovery, notification cancellation, Board selection, provider catalog storage, remote callbacks, and recording-share state follow their current operation identities.
+
+
 ## [2.1.0] - 2026-10-09
 
 Harness 2.1 adds secure connections from the native iPhone and iPad companion, plus pairing,

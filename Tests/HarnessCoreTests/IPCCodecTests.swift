@@ -432,11 +432,15 @@ final class IPCCodecTests: XCTestCase {
     /// `requestExhaustivenessTripwire` is the compile-time partner: adding an enum case breaks
     /// its no-`default` switch, forcing a sample here so the wire format can't silently regress.
     static let allRequestSamples: [IPCRequest] = [
-        .listAttention,
+        .listAttention(),
         .acknowledgeAttention(surfaceID: UUID().uuidString),
         .snoozeAttention(surfaceID: UUID().uuidString, minutes: 15),
         .library(.list),
+        .libraryForClient(.list, capabilities: [DaemonStats.paneContent]),
+        .getSnapshotForClient(capabilities: [DaemonStats.paneContent]),
+        .previewPane(surfaceID: UUID().uuidString, specification: PreviewSpecification(url: "http://localhost:3000"), updateExisting: false, capabilities: [DaemonStats.paneContent]),
         .newTabInSession(sessionID: UUID(), cwd: "/tmp"),
+        .searchOutputFiltered(id: UUID(), query: "error.*", caseSensitive: false, sessionID: nil, offset: 0, generation: nil, filter: OutputSearchFilter(regex: true, agent: .codex)),
         .searchOutput(id: UUID(), query: "error", caseSensitive: false, sessionID: nil, offset: 0),
         .searchPaths(id: UUID(), surfaceID: UUID().uuidString, path: nil, query: "src", project: true),
         .cancelSearch(id: UUID()),
@@ -444,7 +448,8 @@ final class IPCCodecTests: XCTestCase {
         .ping,
         .listWorkspaces,
         .listSurfaces,
-        .listAgents,
+        .listAgents(),
+        .activity(.list(hostID: nil, surfaceID: nil, activeOnly: false, offset: 0, limit: 100)),
         .newWorkspace(name: "Work"),
         .newSession(workspaceID: UUID(), cwd: "/tmp/project", name: "api", shell: "/bin/zsh"),
         .newSessionInGroup(targetSessionID: UUID(), name: "api-2"),
@@ -510,6 +515,10 @@ final class IPCCodecTests: XCTestCase {
         .listClients,
         .detachClient(clientID: UUID()),
         .daemonStats,
+        .retryHistory,
+        .shutdownDaemon(requireEmpty: true),
+        .handoverDaemon(phase: .prepare),
+        .replaceDaemon(executable: nil),
         .setBuffer(name: "scratch", data: Data("hello".utf8)),
         .getBuffer(name: nil),
         .listBuffers,
@@ -617,6 +626,7 @@ final class IPCCodecTests: XCTestCase {
         .hooks([HookEntry(id: UUID(), event: "pane-exited", commandSource: "display-message done", condition: nil)]),
         .follow("{\"payload\":{},\"type\":\"tab.created\"}"),
         .inputRejected("queue full"),
+        .terminalResize(ReplaySize(sequence: 42, cols: 80, rows: 24)),
             .error("Tab not found"),
     ]
 
@@ -625,10 +635,10 @@ final class IPCCodecTests: XCTestCase {
     /// runtime; its value is the exhaustiveness check the Swift compiler performs on it.
     private func requestExhaustivenessTripwire(_ request: IPCRequest) {
         switch request {
-        case .moveSession, .mobileHistory, .mobileHistoryMatch, .listAttention, .acknowledgeAttention, .snoozeAttention, .library, .newTabInSession, .searchOutput, .searchPaths, .cancelSearch, .validateOutputMatch:
+        case .getSnapshotForClient, .libraryForClient, .previewPane, .moveSession, .mobileHistory, .mobileHistoryMatch, .listAttention, .acknowledgeAttention, .snoozeAttention, .library, .newTabInSession, .searchOutput, .searchOutputFiltered, .searchPaths, .cancelSearch, .validateOutputMatch:
             break
-        case .ping, .listWorkspaces, .listSurfaces, .listAgents, .getSnapshot, .listClients,
-             .daemonStats, .listBuffers, .closeEphemeralSessions, .showMessages:
+        case .ping, .listWorkspaces, .listSurfaces, .listAgents, .activity, .getSnapshot, .listClients,
+             .daemonStats, .retryHistory, .shutdownDaemon, .handoverDaemon, .replaceDaemon, .listBuffers, .closeEphemeralSessions, .showMessages:
             break
         case .newWorkspace, .newSession, .newSessionInGroup, .newTab, .newTabInWorkspace, .newSplit,
              .selectWorkspace, .selectWorkspaceByName, .selectSession, .selectTab, .reorderTab,
@@ -661,7 +671,7 @@ final class IPCCodecTests: XCTestCase {
         case .workspaces, .surfaces, .agents, .workspaceID, .sessionID, .tabID, .paneID,
              .surfaceID, .snapshot, .text, .data, .replayResult, .snapshotChanged, .clientDirective, .agentInfo,
              .clients, .daemonStats, .clientID, .buffer, .buffers, .options, .hookID, .hooks,
-             .follow, .attached, .sizeOwnership, .inputRejected, .error:
+             .follow, .attached, .sizeOwnership, .terminalResize, .inputRejected, .error:
             break
         }
     }

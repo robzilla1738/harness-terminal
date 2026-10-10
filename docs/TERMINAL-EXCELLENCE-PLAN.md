@@ -534,3 +534,18 @@ gamma and thickening, and rasterize in the pane's sRGB or Display-P3 space. Over
 rebuild when their color space changes. The [release report](RELEASE-READINESS-2026-10-09.md)
 records verification and scoped performance evidence. Physical acceptance and the broader
 cross-terminal performance targets remain open.
+
+### Coding CLI catalog and monochrome artwork (October 10)
+
+- Verified screenshot coding tools against vendor documentation and expanded the
+  catalog from 23 to 37 identities, including native commands, published npm
+  launchers, and Muse’s documented versioned executable.
+- Bundled original logo assets with pinned source revisions/hashes and notices.
+  All logos now render as monochrome transparent templates with consistent fitting;
+  source colors and background plates do not appear in agent UI.
+- Kept advanced hooks, transcript accounting, provider resume and fan-out limited
+  to implemented adapters. Added response vocabulary negotiation without changing
+  `list-agents` JSON fields or stored canonical identities.
+- Focused detection, compatibility and existing IPC/agent-list checks passed.
+  Reviewed the complete catalog through the actual native renderer. No release,
+  vendor CLI installation, credentials changes, or existing-session restart.

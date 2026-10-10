@@ -94,9 +94,10 @@ final class OnboardingSetup {
                 }
                 cliInstalled = FileManager.default.isExecutableFile(atPath: HarnessCLIPaths.installedCLIPath.path)
             }
-            let failures = pending.compactMap { agent -> String? in
-                do { try OnboardingEnvironment.installHooks(agent.id); return nil }
-                catch { return "\(agent.displayName): \(error.localizedDescription)" }
+            var failures: [String] = []
+            for agent in pending {
+                do { try await OnboardingEnvironment.installHooks(agent.id) }
+                catch { failures.append("\(agent.displayName): \(error.localizedDescription)") }
             }
             finishHooks(error: failures.isEmpty ? nil : failures.joined(separator: "\n"))
         }

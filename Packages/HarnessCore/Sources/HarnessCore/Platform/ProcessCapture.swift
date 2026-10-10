@@ -28,9 +28,11 @@ public enum ProcessCaptureError: Error, LocalizedError, Equatable {
 public enum ProcessCapture {
     public static func run(_ executable: URL, arguments: [String], stdin: Data? = nil,
                            environment: [String: String]? = nil, timeout: TimeInterval? = nil,
+                           inputHandle: FileHandle? = nil, terminationGrace: TimeInterval = 0.1,
                            maxOutputBytes: Int = 64 * 1024 * 1024,
                            cancelled: () -> Bool = { false }) throws -> ProcessOutput {
         if cancelled() { throw ProcessCaptureError.cancelled }
+        guard stdin == nil || inputHandle == nil else { throw ProcessCaptureError.pipeFailure }
         let deadline = timeout.map { ProcessInfo.processInfo.systemUptime + max(0, $0) }
         let outputLimit = max(0, maxOutputBytes)
         let process = Process()
@@ -41,7 +43,7 @@ public enum ProcessCapture {
         let input = stdin.map { _ in Pipe() }
         process.standardOutput = out
         process.standardError = err
-        process.standardInput = input ?? FileHandle.nullDevice
+        process.standardInput = input ?? inputHandle ?? FileHandle.nullDevice
         try process.run()
         // A child may close stdin early. Block SIGPIPE only on this worker thread, and
         // consume a newly pending signal before restoring its original mask.
@@ -117,7 +119,7 @@ public enum ProcessCapture {
             let pid = process.processIdentifier
             let ownsGroup = getpgid(pid) == pid
             if process.isRunning { kill(ownsGroup ? -pid : pid, SIGTERM) }
-            let grace = ProcessInfo.processInfo.systemUptime + 0.1
+            let grace = ProcessInfo.processInfo.systemUptime + min(max(terminationGrace, 0.1), 2)
             while process.isRunning, ProcessInfo.processInfo.systemUptime < grace { usleep(5_000) }
             if process.isRunning { kill(ownsGroup ? -pid : pid, SIGKILL) }
             throw error

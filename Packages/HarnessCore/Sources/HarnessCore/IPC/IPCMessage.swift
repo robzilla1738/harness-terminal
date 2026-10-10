@@ -9,13 +9,16 @@ public enum IPCRequest: Codable, Sendable {
     case listSurfaces
     /// List every running agent (one row per tab carrying a detected `Tab.agent`)
     /// with its workspace/session/tab/pane context, state, and `.waiting` signal.
-    case listAgents
+    case listAgents(capabilities: [String]? = nil)
+    case activity(ActivityOperation)
     case searchOutput(id: UUID, query: String, caseSensitive: Bool, sessionID: SessionID?, offset: Int, generation: String? = nil)
+    case searchOutputFiltered(id: UUID, query: String, caseSensitive: Bool, sessionID: SessionID?, offset: Int, generation: String?, filter: OutputSearchFilter)
     case searchPaths(id: UUID, surfaceID: String, path: String?, query: String, project: Bool)
     case validateOutputMatch(id: UUID, match: OutputSearchMatch, epoch: String, revision: Int)
     case cancelSearch(id: UUID)
     case library(LibraryOperation)
-    case listAttention
+    case libraryForClient(LibraryOperation, capabilities: [String])
+    case listAttention(capabilities: [String]? = nil)
     case acknowledgeAttention(surfaceID: String)
     case snoozeAttention(surfaceID: String, minutes: Int)
     case newWorkspace(name: String)
@@ -61,7 +64,9 @@ public enum IPCRequest: Codable, Sendable {
     case updateTabGitBranch(workspaceID: UUID, tabID: UUID, branch: String?)
     case send(surfaceID: String, text: String)
     case sendData(surfaceID: String, data: Data)
+    case previewPane(surfaceID: String, specification: PreviewSpecification, updateExisting: Bool, capabilities: [String])
     case getSnapshot
+    case getSnapshotForClient(capabilities: [String])
     case createSurface(cwd: String?, shell: String?)
     case ensureSurface(surfaceID: String, cwd: String?, shell: String?, rows: UInt16, cols: UInt16, scrollbackBytes: Int?, requireInLayout: Bool? = nil)
     case attachSurface(surfaceID: String)
@@ -127,6 +132,12 @@ public enum IPCRequest: Codable, Sendable {
     case listClients
     case detachClient(clientID: UUID)
     case daemonStats
+    /// Local owner recovery; never stops shells or drops unauthenticated history.
+    case retryHistory
+    /// Local administrative shutdown, guarded atomically against shell creation.
+    case shutdownDaemon(requireEmpty: Bool)
+    case handoverDaemon(phase: DaemonHandoverPhase, checkpoint: Data? = nil)
+    case replaceDaemon(executable: String?)
     // Paste buffers
     case setBuffer(name: String?, data: Data)
     case getBuffer(name: String?)
@@ -144,7 +155,7 @@ public enum IPCRequest: Codable, Sendable {
     /// `subscribeSurfaceOutput`.
     /// `directives`: this client decodes `.clientDirective` pushes (optional, so older peers
     /// on either side still decode the request).
-    case subscribeSnapshot(label: String?, directives: Bool? = nil)
+    case subscribeSnapshot(label: String?, directives: Bool? = nil, capabilities: [String]? = nil)
     case applyLayout(tabID: UUID, layout: String, mainPaneID: UUID?)
     case nextLayout(tabID: UUID)
     case previousLayout(tabID: UUID)
@@ -249,8 +260,9 @@ public struct AttachRequest: Codable, Equatable, Sendable {
     /// Resume retained deltas, but send only current state when a resync is required.
     public var screenOnResync: Bool?
     public var checkpoint: Bool?
+    public var geometryEvents: Bool?
 
-    public init(surfaceID: String, label: String? = nil, readOnly: Bool = false, history: Bool = true, fromSequence: UInt64? = nil, epoch: String? = nil, inputErrors: Bool? = nil, screenOnResync: Bool? = nil, checkpoint: Bool? = nil) {
+    public init(surfaceID: String, label: String? = nil, readOnly: Bool = false, history: Bool = true, fromSequence: UInt64? = nil, epoch: String? = nil, inputErrors: Bool? = nil, screenOnResync: Bool? = nil, checkpoint: Bool? = nil, geometryEvents: Bool? = nil) {
         self.surfaceID = surfaceID
         self.label = label
         self.readOnly = readOnly
@@ -259,7 +271,7 @@ public struct AttachRequest: Codable, Equatable, Sendable {
         self.epoch = epoch
         self.inputErrors = inputErrors
         self.screenOnResync = screenOnResync
-        self.checkpoint = checkpoint
+        self.checkpoint = checkpoint; self.geometryEvents = geometryEvents
     }
 }
 
@@ -315,6 +327,8 @@ public struct SizeOwnership: Codable, Equatable, Sendable {
 /// A request from the daemon to the attached apps, for verbs that act on app-side state
 /// (`harness-cli copy-mode` enters the app's copy-mode overlay on that pane).
 public enum ClientDirective: Codable, Equatable, Sendable {
+    case capabilities([String])
+    case notification(DesktopNotificationDelivery)
     case copyMode(surfaceID: String, enabled: Bool)
 }
 
@@ -344,6 +358,8 @@ public enum IPCResponse: Codable, Sendable {
     /// Pushed on an output subscription when this client's share of the surface's size
     /// changes: whether it owns the size, and the size the PTY has.
     case sizeOwnership(SizeOwnership)
+    /// Only sent to clients opting into geometryEvents. Ordered with output at its anchor.
+    case terminalResize(ReplaySize)
     case agentInfo(AgentSnapshot?)
     case clients([ClientSummary])
     case daemonStats(DaemonStats)
@@ -435,3 +451,5 @@ public struct IPCReply: Codable, Sendable {
         self.response = response
     }
 }
+
+public enum DaemonHandoverPhase: String, Codable, Sendable { case prepare, activate, resume }

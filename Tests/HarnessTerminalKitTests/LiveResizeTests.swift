@@ -9,6 +9,29 @@ import XCTest
 /// drag ends instead of waiting out the coalescing delay.
 @MainActor
 final class LiveResizeTests: XCTestCase {
+    func testUnmountedGeometryDoesNotVotePlaceholderPTYSize() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("Metal unavailable") }
+        let view = HarnessTerminalSurfaceView(offMainParserFramePipeline: false)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = view
+        view.layout()
+        view.viewDidEndLiveResize()
+        let original = view.testingGridSize
+        XCTAssertGreaterThan(original.cols, 1)
+        var votes = 0
+        view.onResize = { _, _ in votes += 1 }
+        view.frame = .zero
+        view.layout()
+        view.viewDidEndLiveResize()
+        XCTAssertEqual(view.testingGridSize.cols, original.cols)
+        XCTAssertEqual(view.testingGridSize.rows, original.rows)
+        XCTAssertEqual(votes, 0)
+        view.removeFromSuperview()
+        view.layout()
+        XCTAssertEqual(votes, 0)
+    }
+
     func testLiveResizeLifecycleTogglesTransactionPresentMode() {
         let view = HarnessTerminalSurfaceView(offMainParserFramePipeline: true)
         XCTAssertFalse(view.testingPresentsWithTransaction)

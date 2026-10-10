@@ -128,7 +128,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         titleLeading.constant = agent == nil ? 0 : HarnessDesign.Spacing.md
         if let agent {
             agentIcon.image = AgentIconRenderer.templateOrMonogramImage(for: agent, size: HarnessDesign.paneHeaderIconSize)
-            agentIcon.contentTintColor = NSColor.fromHex(SessionCoordinator.shared.settings.agentColorHex(for: agent)) ?? c.accent
+            agentIcon.contentTintColor = c.textPrimary
         } else {
             agentIcon.image = nil
         }

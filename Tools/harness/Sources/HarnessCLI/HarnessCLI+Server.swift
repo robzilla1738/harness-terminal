@@ -5,6 +5,22 @@ import HarnessCore
 /// replay, remote, kill/start-server, stats/clients, doctor). Mechanically extracted from
 /// `HarnessCLI.swift` (PR-32): zero logic change.
 extension HarnessCLI {
+    static func handleDaemonReplacement(_ args: [String]) throws {
+        guard !args.contains(where: { $0 == "--host" || $0.hasPrefix("--host=") }) else {
+            throw DaemonSessionError.daemonError("Daemon replacement requires a local connection.")
+        }
+        let client = DaemonClient()
+        guard case let .daemonStats(stats) = try? client.request(.daemonStats, timeout: 1), stats.supports(DaemonStats.sessionHost) else {
+            throw DaemonSessionError.daemonError("This daemon has no stable session host. Preserve its shells until they close, then use daemon-restart --if-empty.")
+        }
+        let path = flagValue(args, flag: "--binary")
+        switch try client.request(.replaceDaemon(executable: path), timeout: 30) {
+        case .ok: print("Application daemon replaced; live shells and terminal streams preserved.")
+        case let .error(message): throw DaemonSessionError.daemonError(message)
+        default: throw DaemonSessionError.daemonError("Unexpected daemon replacement response; work remains running.")
+        }
+    }
+
     static func handleAttach(_ args: [String]) throws -> Int32 {
         guard let surface = flagValue(args, flag: "--surface") else {
             fputs("Usage: harness-cli attach --surface <id> [--read-only] [--history] [--detach-keys <bytes>] [--host <name>]\n", harnessStderr)
@@ -127,7 +143,7 @@ extension HarnessCLI {
     }
 
     /// `record --surface <id> --output <file> [--display]` — record a surface's
-    /// output to a JSON Lines file (see `RecordingEvent`); `--display` also mirrors
+    /// output and actual PTY geometry to a protected archive; `--display` also mirrors
     /// the output to this terminal. Stops on Ctrl-C or when the surface closes.
     static func handleRecord(_ args: [String], client: DaemonClient) -> Int32 {
         guard let surface = flagValue(args, flag: "--surface"),
@@ -262,56 +278,59 @@ extension HarnessCLI {
         _ = try checkedRequest(client, .detachClient(clientID: id))
     }
 
-    /// tmux `kill-server`, adapted to launchd supervision: SIGTERM stops the daemon
-    /// gracefully; KeepAlive respawns it with sessions restored from layout.json. A
-    /// permanent stop is launchctl's job, so say so instead of fighting it.
-    /// Local-only by construction (PID file + signal): with `--host`, refuse loudly
-    /// instead of SIGTERMing the LOCAL daemon while targeting a remote one.
-    static func handleKillServer(_ args: [String]) {
-        if flagValue(args, flag: "--host") != nil {
-            fputs("kill-server: operates on the local daemon only — run it on the host (ssh <host> harness-cli kill-server)\n", harnessStderr)
-            exit(64)
+    static func restartAuthorization(_ args: [String]) throws -> Bool {
+        guard !args.contains("--host"), !args.contains(where: { $0.hasPrefix("--host=") }) else {
+            throw DaemonRestart.Failure.refused("This command administers the local service only. Run it on the intended host.")
         }
-        let raw = (try? String(contentsOf: HarnessPaths.daemonPIDURL, encoding: .utf8)) ?? ""
-        guard let pid = Int32(raw.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 0 else {
-            fputs("kill-server: no daemon.pid — is the daemon running? (try: harness-cli ping)\n", harnessStderr)
-            exit(1)
+        guard !(args.contains("--force") && args.contains("--if-empty")) else {
+            throw DaemonRestart.Failure.refused("Choose --force or --if-empty, not both.")
         }
-        // PID-reuse guard: after an unclean shutdown the recorded PID can belong to an
-        // unrelated process — never signal anything that isn't a live HarnessDaemon.
-        guard isLiveHarnessDaemon(pid) else {
-            fputs("kill-server: pid \(pid) from daemon.pid is not a running HarnessDaemon (stale file?) — nothing to signal\n", harnessStderr)
-            exit(1)
+        if args.contains("--force") { return true }
+        if args.contains("--if-empty") { return false }
+        guard isatty(STDIN_FILENO) != 0 else {
+            throw DaemonRestart.Failure.refused("Noninteractive shutdown requires --if-empty or explicit --force.")
         }
-        guard kill(pid, SIGTERM) == 0 else {
-            fputs("kill-server: kill(\(pid)) failed: \(String(cString: strerror(errno)))\n", harnessStderr)
-            exit(1)
+        let stats = try? DaemonClient().request(.daemonStats, timeout: 1)
+        if case let .daemonStats(value)? = stats {
+            fputs("This stops \(value.surfaceCount) shells and all programs they own. Type 'stop shells' to continue: ", harnessStderr)
+        } else {
+            fputs("This stops every shell and program owned by the local service. Type 'stop shells' to continue: ", harnessStderr)
         }
-        print("sent SIGTERM to HarnessDaemon (pid \(pid))")
-        #if os(macOS)
-        print("note: launchd KeepAlive restarts it (sessions restore from layout.json);")
-        print("      to stop it for good: launchctl bootout gui/$(id -u)/\(HarnessPaths.launchAgentLabel)")
-        #endif
+        guard readLine() == "stop shells" else { throw DaemonRestart.Failure.refused("Cancelled; shells preserved.") }
+        return true
     }
 
-    /// `kill(pid, 0)` liveness probe + executable identity (mirrors
-    /// `DaemonLifecycle.executablePath`, which the CLI target doesn't link).
-    static func isLiveHarnessDaemon(_ pid: Int32) -> Bool {
-        guard kill(pid, 0) == 0 || errno == EPERM else { return false }
-        #if canImport(Darwin)
-        var buffer = [UInt8](repeating: 0, count: Int(MAXPATHLEN))
-        let length = buffer.withUnsafeMutableBufferPointer { ptr -> Int32 in
-            proc_pidpath(pid, ptr.baseAddress, UInt32(MAXPATHLEN))
+    static func handleKillServer(_ args: [String]) throws {
+        _ = try DaemonRestart.stop(force: restartAuthorization(args))
+        print("Session service stopped; its terminals have been interrupted. Saved layouts can create fresh shells.")
+    }
+
+    static func handleDaemonRestart(_ args: [String]) throws {
+        let force = try restartAuthorization(args)
+        let previousExecutable = try DaemonRestart.stop(force: force)
+        let executable = locateDaemonBinary() ?? previousExecutable
+        if !HarnessPaths.hasHomeOverride {
+            _ = try ServiceInstallers.current.activate(daemonPath: executable, harnessHome: HarnessPaths.applicationSupport)
         }
-        guard length > 0 else { return false }
-        let path = String(decoding: buffer.prefix(Int(length)), as: UTF8.self)
-        #else
-        var buffer = [CChar](repeating: 0, count: 4096)
-        let len = readlink("/proc/\(pid)/exe", &buffer, buffer.count - 1)
-        guard len > 0 else { return false }
-        let path = String(decoding: buffer[0 ..< len].map { UInt8(bitPattern: $0) }, as: UTF8.self)
-        #endif
-        return (path as NSString).lastPathComponent.contains("HarnessDaemon")
+        // Installation can be unavailable, or the home can be an isolated development home.
+        // A responding/starting owner is retained rather than competing with it.
+        if case .absent = DaemonOwnership.probe() {
+            let process = Process()
+            process.executableURL = executable
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+        }
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            if case .pong? = try? DaemonClient().request(.ping, timeout: 0.3) {
+                print("Session service restarted.")
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        throw DaemonRestart.Failure.refused("The replacement is not ready. No additional instance was started; inspect daemon logs.")
     }
 
     /// tmux `start-server`, adapted: ensure the daemon is up (ping → launchctl kickstart).
@@ -322,8 +341,12 @@ extension HarnessCLI {
             print("daemon already running")
             return
         }
-        if flagValue(args, flag: "--host") != nil {
+        if args.contains("--host") || args.contains(where: { $0.hasPrefix("--host=") }) {
             fputs("start-server: cannot start a remote daemon — start it on the host (systemd/launchctl or harness-cli install)\n", harnessStderr)
+            exit(1)
+        }
+        guard case .absent = DaemonOwnership.probe() else {
+            fputs("start-server: an existing or uncertain owner was preserved; inspect daemon logs\n", harnessStderr)
             exit(1)
         }
         #if os(macOS)

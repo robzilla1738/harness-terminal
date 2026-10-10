@@ -64,7 +64,7 @@ def main():
     options = args.parse_args()
     cli = options.products.resolve() / "harness-cli"
     daemon_path = options.products.resolve() / "HarnessDaemon"
-    with tempfile.TemporaryDirectory(prefix="harness-mobile-") as directory:
+    with tempfile.TemporaryDirectory(prefix="harness-mobile-", dir="/tmp") as directory:
         env = dict(os.environ, HARNESS_HOME=directory)
         daemon = subprocess.Popen([str(daemon_path)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         bridge = None
@@ -146,12 +146,23 @@ def main():
                 except subprocess.TimeoutExpired:
                     bridge.kill()
                     bridge.wait()
-            daemon.terminate()
-            try:
-                daemon.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                daemon.kill()
-                daemon.wait()
+            # Ask the disposable owner to close its shells and retire the worker;
+            # acknowledgement precedes completion, so wait before removing its home.
+            if daemon.poll() is None:
+                try:
+                    import socket
+                    payload = json.dumps({"request": {"shutdownDaemon": {"requireEmpty": False}}}).encode()
+                    with socket.socket(socket.AF_UNIX) as control:
+                        control.settimeout(5); control.connect(str(Path(directory) / "harness.sock"))
+                        control.sendall(struct.pack(">I", len(payload)) + payload)
+                        control.recv(4096)
+                except OSError:
+                    daemon.terminate()
+                try:
+                    daemon.wait(timeout=12)
+                except subprocess.TimeoutExpired:
+                    daemon.terminate()
+                    daemon.wait(timeout=12)
 
 
 if __name__ == "__main__":

@@ -157,6 +157,11 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
             guard let self else { return event }
             if event.type == .leftMouseDown {
                 self.pasteboardCountAtMouseDown = NSPasteboard.general.changeCount
+                if self.eventIsInsideTerminalArea(event), let container = self.paneContainer {
+                    for (surface, frame) in container.islandFrames(in: self.terminalHost) where frame.contains(self.terminalHost.convert(event.locationInWindow, from: nil)) {
+                        SessionCoordinator.shared.setActiveSurface(surface)
+                    }
+                }
             } else if event.type == .leftMouseUp,
                       SessionCoordinator.shared.settings.copyOnSelect,
                       self.eventIsInsideTerminalArea(event),
@@ -239,7 +244,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     }
 
     func tabBarDidRequestPeek() {
-        TabPeekController.toggle()
+        TabPeekController.toggle(relativeTo: view.window)
     }
 
     func refreshTabBarMetadata() {
@@ -322,6 +327,8 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         guard force || key != lastStructureKey else {
             // Same layout: only a ratio set elsewhere (`resize-pane`, Equalize Splits) can
             // differ, and it moves the dividers in place.
+            paneContainer?.refreshContent(from: displayNode)
+            paneContainer?.refreshHeaders()
             paneContainer?.applyRatios(from: displayNode)
             return
         }
@@ -335,6 +342,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         paneContainer?.removeFromSuperview()
         let container = PaneContainerView(
             tabID: tab.id,
+            owner: context.owner,
             sidebarVisible: tabRowHidden,
             node: displayNode,
             cwd: tab.cwd,
@@ -368,7 +376,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     private func paneKey(_ node: PaneNode) -> String {
         switch node {
         case let .leaf(leaf):
-            return "l:\(leaf.surfaceID.uuidString)"
+            return "l:\(leaf.surfaceID.uuidString):\(leaf.paneContent.kind)"
         case let .branch(direction, _, first, second):
             // Ratio is intentionally excluded from the rebuild key: a divider drag
             // persists the ratio but must not force a pane remount (that was the
@@ -398,10 +406,11 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
 final class PaneContainerView: NSView {
     private let coordinator = SessionCoordinator.shared
     private let tabID: TabID?
+    private let hostOwner: String
     private var islands: [PaneIslandView] = []
 
-    init(tabID: TabID, sidebarVisible: Bool = false, node: PaneNode, cwd: String, program: String?, agent: String? = nil, themeName: String) {
-        self.tabID = tabID
+    init(tabID: TabID, owner: String, sidebarVisible: Bool = false, node: PaneNode, cwd: String, program: String?, agent: String? = nil, themeName: String) {
+        self.tabID = tabID; self.hostOwner = owner
         super.init(frame: .zero)
         HarnessDesign.makeClear(self)
         let settings = SessionCoordinator.shared.settings
@@ -454,15 +463,20 @@ final class PaneContainerView: NSView {
 
     /// Re-read each pane's identity and focus into its header and its VoiceOver label.
     func refreshHeaders() {
-        guard let tabID, let tab = coordinator.tab(tabID) else { return }
+        guard let tabID, let tab = coordinator.snapshot(for: hostOwner).workspaces.flatMap(\.sessions).flatMap(\.tabs).first(where: { $0.id == tabID }) else { return }
         let leaves = tab.rootPane.allLeaves()
         let focused = coordinator.activeSurfaceID
         for island in islands {
             guard let index = leaves.firstIndex(where: { $0.surfaceID == island.surfaceID }) else { continue }
             let identity = PaneIdentity.of(leaf: leaves[index], in: tab)
-            let title = SurfaceIdentity.label(directory: identity.directory, program: identity.program, agent: identity.agent?.commandToken)
+            let title: String
+            switch leaves[index].paneContent {
+            case .terminal: title = SurfaceIdentity.label(directory: identity.directory, program: identity.program, agent: identity.agent?.commandToken)
+            case let .preview(value): title = value.title ?? "Preview · \(value.url)"
+            case let .unsupported(kind, _): title = "Unsupported pane · \(kind)"
+            }
             let isFocused = leaves.count == 1 || island.surfaceID == focused
-            island.terminalHost?.setAccessibilityLabel(
+            island.contentView?.setAccessibilityLabel(
                 "Pane \(index + 1) of \(leaves.count), \(title)" + (isFocused && leaves.count > 1 ? ", focused" : "")
             )
             guard showsHeaders, let header = island.header else { continue }
@@ -473,13 +487,19 @@ final class PaneContainerView: NSView {
     /// Tell VoiceOver which pane now has focus when it moves between split panes.
     private func announceFocusedPane() {
         guard let focused = coordinator.activeSurfaceID, focused != announcedSurface,
-              let host = islands.first(where: { $0.surfaceID == focused })?.terminalHost,
+              let host = islands.first(where: { $0.surfaceID == focused })?.contentView,
               let label = host.accessibilityLabel(), islands.count > 1
         else { return }
         announcedSurface = focused
         NSAccessibility.post(element: host, notification: .announcementRequested, userInfo: [
             .announcement: label, .priority: NSAccessibilityPriorityLevel.medium.rawValue,
         ])
+    }
+
+    func refreshContent(from node: PaneNode) {
+        for leaf in node.allLeaves() {
+            if case .preview = leaf.paneContent { _ = coordinator.previewHost(for: leaf, owner: hostOwner) }
+        }
     }
 
     /// Paints the gutter around the islands. When the window is translucent nothing else
@@ -570,7 +590,12 @@ final class PaneContainerView: NSView {
     private func build(node: PaneNode, cwd: String, program: String?, agent: String?, into parent: NSView, separated: Bool) {
         switch node {
         case let .leaf(leaf):
-            let host = coordinator.terminalHost(for: leaf.surfaceID, cwd: cwd)
+            let host: NSView
+            switch leaf.paneContent {
+            case .terminal: host = coordinator.terminalHost(for: leaf.surfaceID, cwd: leaf.cwd ?? cwd)
+            case .preview: host = coordinator.previewHost(for: leaf, owner: hostOwner)
+            case .unsupported: host = NSTextField(wrappingLabelWithString: PreviewError.unsupported.localizedDescription)
+            }
             let island = PaneIslandView(surfaceID: leaf.surfaceID, separated: separated, showsHeader: showsHeaders)
             island.translatesAutoresizingMaskIntoConstraints = false
             parent.addSubview(island)
@@ -669,6 +694,7 @@ final class PaneContainerView: NSView {
 @MainActor
 final class PaneIslandView: NSView {
     private(set) weak var terminalHost: TerminalHostView?
+    private(set) weak var contentView: NSView?
     private let separated: Bool
     let surfaceID: SurfaceID
     /// Title row, present on comfortable panes when pane headers are on.
@@ -748,6 +774,7 @@ final class PaneIslandView: NSView {
     }
 
     func embed(_ host: NSView) {
+        contentView = host
         host.translatesAutoresizingMaskIntoConstraints = false
         addSubview(host)
         NSLayoutConstraint.activate([

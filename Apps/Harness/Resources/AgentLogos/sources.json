@@ -159,5 +159,105 @@
     "official": "https://pi.dev/press-kit",
     "file": "pi.svg",
     "sha256": "abd66e7868b2d24f0f0895f9237ee8a6dcb22337583b0dc54aeb595acecb4d6b"
+  },
+  "devin": {
+    "url": "https://devin.ai/assets/brand/logos/devin/symbol-dark.svg",
+    "license": "Devin official brand kit",
+    "official": "https://devin.ai/brand",
+    "file": "devin.svg",
+    "sha256": "ccc076ec6d201abbed6d7531a2ad2f20bf72dbb4a19fca65340590a49970a248",
+    "extraction": "Preserve the official white symbol paths; omit only the black background rectangle."
+  },
+  "command-code": {
+    "url": "https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/commandcode.svg",
+    "license": "MIT (LobeHub)",
+    "official": "https://commandcode.ai/docs/quickstart",
+    "file": "command-code.svg",
+    "sha256": "0b3090f6e9194f32520e5b98ea43c5bc1a0f04644c94d1bade69fab7413e1531"
+  },
+  "qoder": {
+    "url": "https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/qoder.svg",
+    "license": "MIT (LobeHub)",
+    "official": "https://docs.qoder.com/cli/overview",
+    "file": "qoder.svg",
+    "sha256": "f8503aacc41a58e723430488d082f6730c8a6a9ffecdd0a00c522e6bcdb4abb9"
+  },
+  "antigravity": {
+    "url": "https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/antigravity.svg",
+    "license": "MIT (LobeHub)",
+    "official": "https://antigravity.google/docs/getting-started?tab=cli",
+    "file": "antigravity.svg",
+    "sha256": "43f551fd125c17fb54c8c74eb461924fb97f32bb64ac89f73bb73852753a6461"
+  },
+  "junie": {
+    "url": "https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/junie.svg",
+    "license": "MIT (LobeHub)",
+    "official": "https://junie.jetbrains.com/docs/junie-cli.html",
+    "file": "junie.svg",
+    "sha256": "dded0700186377523b7b10bbb204fd3f095d1ea52fe89722cd6cc319a154e208"
+  },
+  "codebuddy": {
+    "url": "https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/codebuddy.svg",
+    "license": "MIT (LobeHub)",
+    "official": "https://www.codebuddy.ai/docs/cli/quickstart",
+    "file": "codebuddy.svg",
+    "sha256": "abe926f4acd9d56439bb5568a267d19d5a92201dbd69ad1cf179209b5ef79f91"
+  },
+  "bob": {
+    "url": "https://bob.ibm.com/icon.svg?v=1",
+    "license": "IBM Bob brand mark",
+    "official": "https://bob.ibm.com/docs/shell",
+    "file": "bob.svg",
+    "sha256": "2d0239059a21146a37f2b1c365ae83724b564e078b78e1f57990537712ca01a6"
+  },
+  "coderabbit": {
+    "url": "https://coderabbit.ai/images/logo-orange.svg",
+    "license": "CodeRabbit brand mark",
+    "official": "https://docs.coderabbit.ai/cli",
+    "file": "coderabbit.svg",
+    "sha256": "98f494c148147fc7c11b8ac2587ccdeb77bcfbb99ba563e009caf8323d4877d6"
+  },
+  "oz": {
+    "url": "https://www.warp.dev/img/logos/warp-pixel-icon.svg",
+    "license": "Warp brand mark",
+    "official": "https://docs.warp.dev/agents/cli/oz-cli/",
+    "file": "oz.svg",
+    "sha256": "cbf3e7d8bffb3133e323e09f85906e6be4ccda285b490ab366d174c7ce291848"
+  },
+  "codebuff": {
+    "url": "https://www.codebuff.com/favicon/apple-touch-icon.png",
+    "license": "Codebuff brand mark",
+    "official": "https://www.codebuff.com/docs/help/quick-start",
+    "file": "codebuff.png",
+    "sha256": "6ac6bf242c038b3bf5a75591bff997209f9e1bd0dc8b740a6e95f7155260b751"
+  },
+  "muse": {
+    "url": "https://dev.meta.ai/docs/muse-code",
+    "license": "Meta brand mark",
+    "official": "https://dev.meta.ai/lp/muse-code",
+    "file": "muse.svg",
+    "sha256": "15cfe8219934ef00517b4ab297a6931b4438912b3e403883a926b0bf16dc7c87",
+    "extraction": "Unmodified geometry of the inline meta-symbol-dark SVG on the official Muse Code documentation."
+  },
+  "minimax-code": {
+    "url": "https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/minimax.svg",
+    "official": "https://github.com/MiniMax-AI/minimax-code",
+    "license": "MIT (LobeHub)",
+    "file": "minimax-code.svg",
+    "sha256": "bb96e2005081494716de6af5fd030701ae551ee68393ad61b325c07325607848"
+  },
+  "trae": {
+    "url": "https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/trae.svg",
+    "official": "https://docs.trae.cn/cli_get-started-with-trae-code-cli-2",
+    "license": "MIT (LobeHub)",
+    "file": "trae.svg",
+    "sha256": "59ef6255dfce52d4b1e77aff4e1b4ee3cda71cda735b4fb45575e9874a1c11f6"
+  },
+  "abacus-ai": {
+    "url": "https://abacus.ai/static/h23c4bfa0/icon2/favicon-192.png",
+    "official": "https://abacus.ai/help/abacusai-desktop/cli-installation",
+    "license": "Abacus AI brand mark",
+    "file": "abacus-ai.png",
+    "sha256": "23c4bfa05871db6edc0375d0de839ac7eb99a9e9261f9f55774bfb9fd52e4828"
   }
 }

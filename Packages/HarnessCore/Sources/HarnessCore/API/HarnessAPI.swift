@@ -124,12 +124,15 @@ public struct APIMethod: Equatable, Sendable {
     public var summary: String
     public var parameters: APIJSONSchema
     public var result: APIJSONSchema
+    public var access: APIAccess
 
-    public init(name: String, summary: String, parameters: APIJSONSchema, result: APIJSONSchema) {
+    public init(name: String, summary: String, parameters: APIJSONSchema, result: APIJSONSchema,
+                access: APIAccess = .init(effect: .write, exposures: [.cli])) {
         self.name = name
         self.summary = summary
         self.parameters = parameters
         self.result = result
+        self.access = access
     }
 }
 
@@ -142,10 +145,11 @@ public struct APIMethodDocument: Encodable, Equatable {
     public var required: [String]?
     public var additionalProperties: Bool
     public var result: APIJSONSchema
+    public var access: APIAccess
 
     enum CodingKeys: String, CodingKey {
         case schema = "$schema"
-        case title, description, type, properties, required, additionalProperties, result
+        case title, description, type, properties, required, additionalProperties, result, access
     }
 }
 
@@ -300,9 +304,67 @@ public enum HarnessAPI {
     public static let schemaURL = "https://json-schema.org/draft/2020-12/schema"
 
     public static let methods: [APIMethod] = [
+        method("pane.explain", "Insert bounded quoted output into a selected foreground agent using bracketed paste, without Enter", object(["pane": string("Source command pane"), "target": string("Selected agent pane"), "run": string("Selected current agent execution UUID")], required: ["target", "run"]), object([:])),
+        method("pane.command_output", "Read the last completed OSC 133 command's bounded output with eviction and truncation flags", object(["pane": string("Canonical pane or surface target"), "maximum_bytes": int("Plain text byte limit, 1–65536; default 32768")]), object(["span": APIJSONSchema(type: "object"), "text": string("Plain output excerpt"), "evicted": bool("Command output has been evicted"), "truncated": bool("Output exceeds the requested bound")])),
+        method("pane.resume_policy", "Explicit per-pane consent to submit the recorded conversation once when a fresh shell is restored", object(["pane": string("Target pane"), "run": string("Verified execution UUID, required when enabling"), "automatic": bool("Explicit automatic restore consent")], required: ["automatic"]), object(["ok": bool("Policy saved")])),
+        method("pane.resume", "Prepare an exact recorded conversation; insert only into an unchanged fresh shell when its identity is supplied", object(["pane": string("Target fresh shell"), "run": string("Recorded execution UUID"), "fresh_shell_identity": string("Identity returned by preparation; omit to preview")], required: ["run"]), object(["command": string("Prepared command, never submitted"), "freshShellIdentity": string("Available only for a fresh shell"), "inserted": bool("Whether the command was inserted")])),
+        method("pane.preview", "Create an adjacent loopback preview, or change an existing preview without replacing a shell", object(["pane": string("Target pane"), "url": string("HTTP or HTTPS loopback URL on the pane host"), "title": string("Optional title"), "update": bool("Update only an existing preview")], required: ["url"]), object(["pane": string("Preview pane UUID")])),
+        method("pane.resources", "Sample CPU and RSS across the pane's process tree", object(["pane": string("Canonical pane or surface target")]), object(["processes": array("Generation-identified processes"), "intervalSeconds": APIJSONSchema(type: "number"), "sampledAt": APIJSONSchema(type: "number")])),
+        method("pane.kill_tree", "Terminate a confirmed process tree after validating its root generation", object(["pane": string("Canonical pane target"), "generation": string("Root generation returned by pane.resources"), "confirmed": bool("Explicit confirmation that the shell and its programs will stop")], required: ["generation", "confirmed"]), object(["ok": bool("Signals sent")])),
+        method("notification.status", "Inspect local notification policy and redacted delivery diagnostics", object([:]), APIJSONSchema(type: "object")),
+        method("notification.configure", "Replace local typed notification policy; external destinations and captured content require explicit opt-in", object(["settings": APIJSONSchema(type: "object", description: "NotificationPolicySettings, including explicit sink consent and credential references", additionalProperties: true)], required: ["settings"]), APIJSONSchema(type: "object")),
+        method("agent.mute", "Mute an exact execution, or agents in a pane when run is omitted", object(["pane": string("Canonical pane target"), "run": string("Optional execution UUID"), "muted": bool("Mute or unmute")], required: ["muted"]), APIJSONSchema(type: "object")),
+        method("power.status", "Inspect daemon idle-sleep policy and observed wake duration", object([:]), APIJSONSchema(type: "object")),
+        method("power.mode", "Override idle-sleep policy until auto or service restart; battery restrictions still apply", object(["mode": APIJSONSchema(type: "string", enumValues: ["auto", "on", "off"])], required: ["mode"]), APIJSONSchema(type: "object")),
+        method("power.configure", "Save local idle-sleep settings with a backup", object(["keepWorkingAgentsAwake": bool("Hold idle sleep while agents work"), "allowOnBattery": bool("Explicit battery opt-in"), "graceSeconds": APIJSONSchema(type: "number", description: "Release grace from zero to 3600 seconds")], required: ["keepWorkingAgentsAwake", "allowOnBattery", "graceSeconds"]), APIJSONSchema(type: "object")),
+        method("profile.list", "Local approved transcript profiles", object([:]), object(["profiles": array("Configured provider profiles")])),
+        method("profile.configure", "Configure local approved transcript profiles with a backup", object(["settings": object(["profiles": APIJSONSchema(type: "array", items: object([
+            "id": string("Stable profile UUID"), "name": string("Profile label"),
+            "provider": APIJSONSchema(type: "string", enumValues: ["codex", "claude-code", "cursor"]),
+            "transcriptRoots": APIJSONSchema(type: "array", items: APIJSONSchema(type: "string")),
+            "pricing": APIJSONSchema(type: "array", items: object([
+                "model": string("Observed model ID"), "currency": string("ISO currency"), "units": APIJSONSchema(type: "string", enumValues: ["per_million_tokens"]),
+                "input": APIJSONSchema(type: "number"), "output": APIJSONSchema(type: "number"), "cachedInput": APIJSONSchema(type: "number"), "cacheCreation": APIJSONSchema(type: "number")
+            ], required: ["model", "currency", "units", "input", "output"]))
+        ], required: ["id", "name", "provider", "transcriptRoots"]))], required: ["profiles"])], required: ["settings"]), object(["ok": bool("Configuration saved")])),
+        method("history.recover", "Retry encrypted history recovery after unlocking the local credential store", object([:]), object(["ok": bool("History recovery completed")])),
+        method("usage.summary", "Observed profile usage and limit freshness; UTC day aggregates", object(["days": int("UTC days, 1–90")]), object(["profiles": array("Observed profile usage"), "from": APIJSONSchema(type: "number"), "to": APIJSONSchema(type: "number")])),
+        method("digest.repositories", "Paginated per-repository retained activity and attributable usage, grouping linked worktrees by canonical Git common identity", object(["days": int("UTC days, 1–90"), "offset": int("Nonnegative repository report offset"), "limit": int("Page size, 1–100")]), object(["reports": array("Repository groups with retained totals, attributable usage and coverage warnings"), "nextOffset": int("Next repository page") ])),
+        method("digest.get", "Deterministic activity totals and a bounded timeline", object(["days": int("UTC days, 1–90"), "surface": string("Optional recorded surface UUID")]), object(["totals": APIJSONSchema(type: "object"), "timeline": array("At most 200 recorded events"), "timelineTruncated": bool("More events contribute to totals than are displayed")])),
+        method("summary.status", "Local opted-in provider configuration and complete model catalog freshness; credentials are references only", object([:]), object(["settings": APIJSONSchema(type: "object"), "catalogs": array("Successful model catalogs"), "refreshing": array("Provider UUIDs"), "failures": APIJSONSchema(type: "object")])),
+        method("summary.configure", "Save reviewed AI settings with exact destination/content consent; automatic workspaces require separate opt-in", object(["settings": APIJSONSchema(type: "object", description: "Versioned AISettings with providers and automaticWorkspaces; never credential values")], required: ["settings"]), object(["settings": APIJSONSchema(type: "object")])),
+        method("summary.models", "Explicitly refresh one provider catalog; preserve the selected model and last successful catalog", object(["provider": string("Provider UUID")], required: ["provider"]), object(["catalogs": array("Cached complete catalogs"), "refreshing": array("Provider UUIDs")])),
+        method("summary.catalog", "Page one complete successful cached model catalog without network requests", object(["provider": string("Provider UUID"), "offset": int("Model offset"), "limit": int("Page size 1–500")], required: ["provider"]), object(["catalog": APIJSONSchema(type: "object"), "nextOffset": int("Next page")])),
+        method("summary.generate", "Submit one bounded digest without tools or automatic billable retries; inspect the returned request UUID", object(["id": string("Stable submission UUID; reuse only for the same request"), "provider": string("Enabled provider UUID"), "workspace": string("Optional local workspace UUID; omitted means host"), "from": number("Unix seconds"), "to": number("Unix seconds")], required: ["id", "provider", "from", "to"]), object(["id": string("Submission UUID"), "state": string("Submitted/result state")])),
+        method("summary.record", "Inspect one submission and encrypted result with provider/model provenance", object(["id": string("Submission UUID")], required: ["id"]), object(["state": string("Result state"), "output": APIJSONSchema(type: "object")])),
+        method("summary.history", "Page retained local summary receipts/results; absent result text may have been purged by persistence opt-out", object(["offset": int("Page offset"), "limit": int("Page size 1–100")]), object(["records": array("Summary observations"), "nextOffset": int("Next page")])),
+        method("summary.cancel", "Cancel an exact submission; uncertain delivery may already be billable", object(["id": string("Submission UUID")], required: ["id"]), object(["state": string("Last recorded state")])),
+        method("agent.list", "Durable agent executions, distinct from provider conversations", object(["host": string("Recorded host UUID"), "surface": string("Recorded surface UUID"), "active": bool("Only live executions"), "offset": int("Nonnegative page offset"), "limit": int("Page size, 1–500")]), object(["runs": array("Executions"), "nextOffset": int("Next page offset when available"), "historyUnavailable": string("Unavailable-history reason when present")])),
+        method("agent.session", "One execution and a page of anchored activity events", object(["host": string("Recorded host UUID"), "run": string("Harness execution UUID"), "offset": int("Nonnegative event offset"), "limit": int("Page size, 1–499")], required: ["run"]), object(["run": APIJSONSchema(type: "object"), "events": array("Activity events"), "nextOffset": int("Next page offset when available")])),
         method("server.version", "Daemon version", object([:]), object(["version": string("Marketing version"), "build": int("Build number")])),
         method("pane.search_paths", "Find files and directories on a pane’s host", object(["pane": string("Source pane"), "path": string("Directory"), "query": string("Fuzzy query"), "project": bool("Search project files")]), object(["root": string("Search root"), "entries": array("Matching paths")])),
         method("output.search", "Search retained output in open sessions (100 results per page)", object(["query": string("Literal text"), "case_sensitive": bool("Match case"), "session": string("Optional session scope"), "offset": int("Result offset")]), object(["matches": array("Matches with source and line locator"), "hasMore": bool("More results are available")])),
+        method("output.search_filtered", "Search retained output with isolated regex and recorded execution filters (100 results per page); times select executions, not individual output lines", object(["query": string("Text or ICU regular expression"), "case_sensitive": bool("Match case"), "session": string("Optional session scope"), "offset": int("Result offset"), "generation": string("Page generation from prior result"), "regex": bool("Use an isolated bounded regex worker"), "agent": enumString("Recorded provider", AgentKind.allCases.map(\.rawValue)), "from": number("Execution overlap start, Unix seconds"), "to": number("Execution overlap end, Unix seconds")], required: ["query"]), object(["matches": array("Matches with source and line locator"), "hasMore": bool("More results available"), "generation": string("Page generation")])),
+        method("policy.audit", "Read redacted evaluated hook decisions; delivery and actual tool execution are separate observations", object(["offset": int("Record offset"), "limit": int("Page size 1–100")]), object(["records": array("Bounded evaluated decisions without tool input, command text, repository or secrets"), "nextOffset": int("Next page"), "unavailable": string("History availability; unavailable keys retain bounded memory capture")])),
+        method("schedule.list", "List explicitly configured local schedules and their latest workload observations", object(["offset": int("Record offset"), "limit": int("Page size 1–100")]), object(["schedules": array("Definitions, timezone, revision and next occurrence"), "occurrences": array("Latest outcomes"), "unavailable": string("Unavailable history or execution state")])),
+        method("schedule.save", "Create or replace a reviewed local schedule; enabled execution is explicit and preserves normal provider approvals", object(["definition": object(["id": string("Schedule UUID"), "name": string("Display name"), "enabled": bool("Explicit opt-in to automatic execution"), "timezone": string("IANA timezone"), "workspaceID": string("Recorded host workspace UUID"), "provider": string("Provider kind; generic for other explicit executables"), "trigger": APIJSONSchema(type: "object", description: "ScheduleTrigger: once(at), cron(expression), agentEvent(kind, optional surfaceID/provider/profile), limitReset(profileID, window, acceptPredictedTime)"), "launch": object(["executable": string("Absolute executable"), "arguments": APIJSONSchema(type: "array", items: APIJSONSchema(type: "string")), "directory": string("Absolute working directory"), "profile": string("Harness profile label"), "environment": APIJSONSchema(type: "object", description: "Optional profile/locale overrides")], required: ["executable", "arguments", "directory", "profile"]), "input": string("Optional bounded initial stdin; never a command argument")], required: ["id", "name", "enabled", "timezone", "workspaceID", "provider", "trigger", "launch"]), "expectedRevision": int("Required for an existing schedule; omit for creation")], required: ["definition"]), object(["revision": int("Saved revision"), "nextAt": number("Next time, if known")])),
+        method("schedule.delete", "Delete an inactive schedule at its reviewed revision", object(["id": string("Schedule UUID"), "expectedRevision": int("Reviewed revision")], required: ["id", "expectedRevision"]), object([:])),
+        method("schedule.occurrences", "Page retained actual/missed/skipped schedule occurrences", object(["id": string("Schedule UUID"), "offset": int("Record offset"), "limit": int("Page size 1–100")], required: ["id"]), object(["occurrences": array("Recorded occurrence outcomes"), "nextOffset": int("Next page")])),
+        method("schedule.cancel", "Request cancellation of one exact workload identity; only reaping establishes its outcome", object(["id": string("Occurrence/workload UUID")], required: ["id"]), object(["state": string("Last observed state")])),
+        method("fanout.list", "List retained fan-out intent and last observed process outcomes", object(["offset": int("Record offset"), "limit": int("Page size, 1–100")]), object(["groups": array("Fan-out records"), "nextOffset": int("Next page")])),
+        method("fanout.start", "Launch 1–8 provider processes against one pinned committed base, preserving their configured approval settings", object(["id": string("Durable operation UUID"), "directory": string("Repository directory"), "base": string("Optional explicit committed base; never includes uncommitted changes"), "workspace": string("Optional workspace UUID"), "prompt": string("Prepared stdin, at most 32 KiB"), "providers": APIJSONSchema(type: "array", items: object(["provider": APIJSONSchema(type: "string", enumValues: ["claude-code", "codex", "cursor"]), "profile": string("Harness profile label, default default"), "executable": string("Optional absolute provider executable"), "providerHome": string("Optional Claude/Codex configuration directory")], required: ["provider"])), "worktrees": bool("Use managed worktrees, default true; false explicitly shares the checkout")], required: ["id", "directory", "prompt", "providers"]), object(["id": string("Durable group ID"), "participants": array("Accepted workloads and partial failures")])),
+        method("fanout.inspect", "Reconcile retained fan-out intent against actual host process receipts; never repeat a launch", object(["id": string("Group UUID")], required: ["id"]), object(["participants": array("Process outcomes and recovery details")])),
+        method("fanout.cancel", "Request cancellation of exactly the recorded workloads; reaping determines completion", object(["id": string("Group UUID")], required: ["id"]), object(["participants": array("Cancellation observations")])),
+        method("fanout.compare", "Compare committed, working-tree and untracked repository state against the pinned base; test results are explicit executions only", object(["id": string("Group UUID")], required: ["id"]), object(["repositories": APIJSONSchema(type: "object"), "failures": APIJSONSchema(type: "object")])),
+        method("fanout.cleanup", "Remove only verified managed worktrees after workload exit, preserving changed files, active processes and unpushed work", object(["id": string("Group UUID")], required: ["id"]), object(["participants": array("Protected cleanup outcomes")])),
+        method("fanout.test", "Run a user-specified test command once in an exited participant's directory, recording its actual process result", object(["id": string("Group UUID"), "participant": string("Participant UUID"), "operation": string("One-shot test UUID"), "executable": string("Absolute executable"), "arguments": APIJSONSchema(type: "array", items: APIJSONSchema(type: "string"))], required: ["id", "participant", "operation", "executable", "arguments"]), object(["participants": array("Explicit test records")])),
+        method("worktree.list", "List durable managed worktree records", object(["offset": int("Record offset"), "limit": int("Page size, 1–100")]), object(["worktrees": array("Managed records"), "nextOffset": int("Next page offset")])),
+        method("worktree.configure", "Set a local absolute parent directory for managed worktrees; omitted directory restores the private default", object(["directory": string("Optional absolute managed parent")]), object(["directory": string("Configured parent, if any")])),
+        method("worktree.create", "Create a managed worktree at one pinned committed base; default requires a clean current checkout", object(["id": string("Operation/worktree UUID, retained for safe retry"), "directory": string("Repository working-tree directory"), "base": string("Explicit committed base; never includes uncommitted changes")], required: ["id", "directory"]), object(["id": string("Management UUID"), "directory": string("Created directory"), "baseCommit": string("Pinned commit"), "state": string("Creation outcome")])),
+        method("worktree.inspect", "Inspect and reconcile a recorded partial operation", object(["id": string("Management UUID")], required: ["id"]), object(["state": string("Reconciled operation outcome")])),
+        method("worktree.compare", "Compare committed, working-tree and untracked changes against the pinned base", object(["id": string("Management UUID")], required: ["id"]), object(["committed": APIJSONSchema(type: "object"), "workingTree": APIJSONSchema(type: "object"), "untrackedFiles": array("Untracked paths")])),
+        method("worktree.difftool", "Prepare a quoted command for the user-configured Git difftool; execution stays explicit", object(["id": string("Management UUID")], required: ["id"]), object(["command": string("Prepared command; never automatically submitted")])),
+        method("worktree.remove", "Remove only a verified managed worktree, protecting dirty files, active processes and unpushed new commits; branches remain addressable", object(["id": string("Management UUID")], required: ["id"]), object(["state": string("Cleanup outcome")])),
         method("setup.list", "Saved setups and recently closed layouts", object([:]), object(["setups": array("Saved setups"), "recentlyClosed": array("Closed layouts")])),
         method("setup.capture", "Save a session as a setup without capturing running commands", object(["session": string("Session id or name"), "name": string("Setup name")]), object(["ok": bool("Success")])),
         method("setup.save", "Import or update a setup; never executes commands", object(["definition": APIJSONSchema(type: "object", description: "Versioned setup definition", additionalProperties: true)]), object(["ok": bool("Success")])),
@@ -443,11 +505,12 @@ public enum HarnessAPI {
 
     /// A bindable command as an API method: `{"args": "-h"}` runs `<name> -h`.
     static func verbMethod(_ name: String) -> APIMethod {
-        method(
-            name,
-            "Run the \(name) command (same as the : prompt and key bindings)",
-            object(["args": string("The command's arguments, e.g. \"-h\" for split-window")]),
-            object(["ok": bool("Applied")])
+        APIMethod(
+            name: name,
+            summary: "Run the \(name) command (same as the : prompt and key bindings)",
+            parameters: object(["args": string("The command's arguments, e.g. \"-h\" for split-window")]),
+            result: object(["ok": bool("Applied")]),
+            access: .init(effect: .write, exposures: [.cli, .lua])
         )
     }
 
@@ -468,7 +531,8 @@ public enum HarnessAPI {
             properties: method.parameters.properties,
             required: method.parameters.required,
             additionalProperties: false,
-            result: method.result
+            result: method.result,
+            access: method.access
         )
     }
 
@@ -482,8 +546,8 @@ public enum HarnessAPI {
     }
 
     public static func listJSON() throws -> String {
-        struct Row: Encodable { var name: String; var summary: String }
-        let rows = methods.map { Row(name: $0.name, summary: $0.summary) }
+        struct Row: Encodable { var name: String; var summary: String; var access: APIAccess }
+        let rows = methods.map { Row(name: $0.name, summary: $0.summary, access: $0.access) }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         return String(decoding: try encoder.encode(rows), as: UTF8.self)
@@ -547,12 +611,40 @@ public enum HarnessAPI {
             return .failure(code: APIExit.badArguments.rawValue, message: "Missing argument \(name)")
         }
         do {
+            try validate(.object(arguments), schema: spec.parameters, path: "arguments")
             return try plan(method, arguments, APITargets(catalog: catalog, environment: environment))
         } catch let failure as APIPlanError {
             return .failure(code: failure.code.rawValue, message: failure.message)
         } catch {
             return .failure(code: APIExit.failed.rawValue, message: "\(error)")
         }
+    }
+
+    private static func validate(_ value: APIArgument, schema: APIJSONSchema, path: String, depth: Int = 0) throws {
+        guard depth <= 16 else { throw APIPlanError(code: .badArguments, message: "Arguments exceed the nesting limit") }
+        var valid = false
+        switch (schema.type, value) {
+        case ("string", .string(let text)):
+            valid = schema.enumValues?.contains(text) ?? true
+        case ("integer", .int): valid = true
+        case ("number", .int): valid = true
+        case ("number", .double(let n)): valid = n.isFinite
+        case ("boolean", .bool): valid = true
+        case ("object", .object(let object)):
+            valid = true
+            for required in schema.required ?? [] where object[required] == nil {
+                throw APIPlanError(code: .badArguments, message: "Missing argument " + path + "." + required)
+            }
+            for (key, item) in object {
+                if let nested = schema.properties?[key] { try validate(item, schema: nested, path: path + "." + key, depth: depth + 1) }
+                else if schema.additionalProperties == false { throw APIPlanError(code: .badArguments, message: "Unknown argument " + path + "." + key) }
+            }
+        case ("array", .array(let items)):
+            valid = true
+            if let nested = schema.items?.schema { for item in items { try validate(item, schema: nested, path: path + "[]", depth: depth + 1) } }
+        default: break
+        }
+        guard valid else { throw APIPlanError(code: .badArguments, message: path + " must match its " + schema.type + " schema") }
     }
 
     private static func plan(_ method: String, _ arguments: [String: APIArgument], _ targets: APITargets) throws -> APIPlan {
@@ -572,9 +664,79 @@ public enum HarnessAPI {
             return .version
         case "pane.search_paths":
             return .query(.searchPaths(id: UUID(), surfaceID: try pane().surfaceID, path: arguments["path"]?.string, query: arguments["query"]?.string ?? "", project: arguments["project"]?.bool ?? false))
-        case "output.search":
+        case "output.search", "output.search_filtered":
             let session = try arguments["session"]?.string.map { try uuid(targets.session($0).id) }
+            if method == "output.search_filtered" {
+                let filter = OutputSearchFilter(regex: arguments["regex"]?.bool ?? false, agent: arguments["agent"]?.string.flatMap(AgentKind.init(rawValue:)), from: arguments["from"]?.double.map { Date(timeIntervalSince1970: $0) }, to: arguments["to"]?.double.map { Date(timeIntervalSince1970: $0) })
+                try filter.validate()
+                return .request(.searchOutputFiltered(id: UUID(), query: try text("query"), caseSensitive: arguments["case_sensitive"]?.bool ?? false, sessionID: session, offset: arguments["offset"]?.int ?? 0, generation: arguments["generation"]?.string, filter: filter))
+            }
             return .request(.searchOutput(id: UUID(), query: try text("query"), caseSensitive: arguments["case_sensitive"]?.bool ?? false, sessionID: session, offset: arguments["offset"]?.int ?? 0, generation: arguments["generation"]?.string))
+        case "policy.audit": return .query(.activity(.hookPolicy(.audit(offset: arguments["offset"]?.int ?? 0, limit: arguments["limit"]?.int ?? 100))))
+        case "summary.status", "summary.configure", "summary.models", "summary.catalog", "summary.generate", "summary.record", "summary.history", "summary.cancel":
+            let operation: AISummaryOperation
+            switch method {
+            case "summary.status": operation = .status
+            case "summary.configure":
+                guard let value = arguments["settings"]?.object else { throw AISummaryError.configuration("Provide reviewed AISettings.") }
+                let settings = try JSONDecoder().decode(AISettings.self, from: JSONSerialization.data(withJSONObject: value.mapValues(\.jsonValue))); try settings.validate(); operation = .configure(settings)
+            case "summary.models": operation = .refreshModels(providerID: try uuid(text("provider")))
+            case "summary.catalog": operation = .catalog(providerID: try uuid(text("provider")), offset: arguments["offset"]?.int ?? 0, limit: arguments["limit"]?.int ?? 500)
+            case "summary.generate":
+                guard let from = arguments["from"]?.double, let to = arguments["to"]?.double else { throw AISummaryError.configuration("Provide the exact range in Unix seconds.") }
+                operation = .generate(id: try uuid(text("id")), providerID: try uuid(text("provider")), workspaceID: try arguments["workspace"]?.string.map(uuid), from: Date(timeIntervalSince1970: from), to: Date(timeIntervalSince1970: to))
+            case "summary.record": operation = .record(id: try uuid(text("id")))
+            case "summary.cancel": operation = .cancel(id: try uuid(text("id")))
+            default: operation = .history(offset: arguments["offset"]?.int ?? 0, limit: arguments["limit"]?.int ?? 100)
+            }
+            return .query(.activity(.aiSummaries(operation)))
+        case "schedule.list", "schedule.save", "schedule.delete", "schedule.occurrences", "schedule.cancel":
+            let operation: ScheduleOperation
+            switch method {
+            case "schedule.list": operation = .list(offset: arguments["offset"]?.int ?? 0, limit: arguments["limit"]?.int ?? 100)
+            case "schedule.occurrences": operation = .occurrences(id: try uuid(text("id")), offset: arguments["offset"]?.int ?? 0, limit: arguments["limit"]?.int ?? 100)
+            case "schedule.delete": operation = .delete(id: try uuid(text("id")), expectedRevision: arguments["expectedRevision"]?.int ?? 0)
+            case "schedule.cancel": operation = .cancelOccurrence(id: try uuid(text("id")))
+            default:
+                guard let value = arguments["definition"]?.object else { throw ScheduleError.invalid("Provide the reviewed definition object.") }
+                let definition = try JSONDecoder().decode(ScheduleDefinition.self, from: JSONSerialization.data(withJSONObject: value.mapValues(\.jsonValue)))
+                try definition.validate(); operation = .save(definition: definition, expectedRevision: arguments["expectedRevision"]?.int)
+            }
+            return .query(.activity(.schedules(requestID: UUID(), operation: operation)))
+        case "fanout.start", "fanout.list", "fanout.inspect", "fanout.cancel", "fanout.compare", "fanout.cleanup", "fanout.test":
+            let operation: FanoutOperation
+            switch method {
+            case "fanout.list": operation = .list(offset: arguments["offset"]?.int ?? 0, limit: arguments["limit"]?.int ?? 100)
+            case "fanout.start":
+                guard let values = arguments["providers"]?.array else { throw FanoutError.invalid }
+                let providers = try values.map { value -> FanoutProvider in
+                    guard let fields = value.object, let raw = fields["provider"]?.string, let provider = AgentKind(rawValue: raw) else { throw FanoutError.invalid }
+                    return FanoutProvider(provider: provider, executable: fields["executable"]?.string, profile: fields["profile"]?.string ?? "default", providerHome: fields["providerHome"]?.string)
+                }
+                operation = .start(id: try uuid(text("id")), directory: try text("directory"), base: arguments["base"]?.string,
+                    workspaceID: try arguments["workspace"]?.string.map(uuid), prompt: try text("prompt"), providers: providers, managedWorktrees: arguments["worktrees"]?.bool ?? true)
+            case "fanout.inspect": operation = .inspect(id: try uuid(text("id")))
+            case "fanout.cancel": operation = .cancel(id: try uuid(text("id")))
+            case "fanout.compare": operation = .compare(id: try uuid(text("id")))
+            case "fanout.cleanup": operation = .cleanup(id: try uuid(text("id")))
+            default:
+                guard let values = arguments["arguments"]?.array else { throw FanoutError.invalid }
+                let strings = try values.map { value -> String in guard let text = value.string else { throw FanoutError.invalid }; return text }
+                operation = .test(id: try uuid(text("id")), participantID: try uuid(text("participant")), operationID: try uuid(text("operation")), executable: try text("executable"), arguments: strings)
+            }
+            return .query(.activity(.fanout(requestID: UUID(), operation: operation)))
+        case "worktree.list", "worktree.configure", "worktree.create", "worktree.inspect", "worktree.compare", "worktree.difftool", "worktree.remove":
+            let operation: WorktreeOperation
+            switch method {
+            case "worktree.list": operation = .list(offset: arguments["offset"]?.int ?? 0, limit: arguments["limit"]?.int ?? 100)
+            case "worktree.configure": operation = .configure(WorktreeSettings(directory: arguments["directory"]?.string))
+            case "worktree.create": operation = .create(id: try uuid(text("id")), directory: try text("directory"), base: arguments["base"]?.string)
+            case "worktree.inspect": operation = .inspect(id: try uuid(text("id")))
+            case "worktree.compare": operation = .compare(id: try uuid(text("id")))
+            case "worktree.difftool": operation = .difftoolCommand(id: try uuid(text("id")))
+            default: operation = .remove(id: try uuid(text("id")))
+            }
+            return .query(.activity(.worktrees(requestID: UUID(), operation: operation)))
         case "setup.list": return .request(.library(.list))
         case "setup.capture":
             return .request(.library(.capture(sessionID: try uuid(targets.session(arguments["session"]?.string).id), name: try text("name"))))
@@ -595,7 +757,58 @@ public enum HarnessAPI {
         case "closed.restore": return .request(.library(.restoreClosed(try uuid(text("id")))))
         case "closed.delete": return .request(.library(.deleteClosed(try arguments["id"]?.string.map(uuid))))
         case "attention.list":
-            return .request(.listAttention)
+            return .request(.listAttention(capabilities: [DaemonStats.agentIdentities]))
+        case "pane.explain": return .request(.activity(.explain(sourceSurfaceID: try pane().surfaceID, targetSurfaceID: try targets.pane(text("target")).surfaceID, targetRunID: try uuid(text("run")))))
+        case "pane.command_output": return .query(.activity(.commandOutput(surfaceID: try pane().surfaceID, maximumBytes: arguments["maximum_bytes"]?.int ?? 32768)))
+        case "pane.resume_policy": return .request(.activity(.resumePolicy(surfaceID: try pane().surfaceID, runID: try arguments["run"].map { _ in try uuid(text("run")) }, automatic: arguments["automatic"]?.bool ?? false)))
+        case "pane.resume": return .request(.activity(.resume(runID: try uuid(text("run")), surfaceID: try pane().surfaceID, freshShellIdentity: arguments["fresh_shell_identity"]?.string)))
+        case "pane.preview":
+            let specification = PreviewSpecification(url: try text("url"), title: arguments["title"]?.string)
+            _ = try specification.validatedURL()
+            return .request(.previewPane(surfaceID: try pane().surfaceID, specification: specification, updateExisting: arguments["update"]?.bool ?? false, capabilities: [DaemonStats.paneContent]))
+        case "pane.resources": return .query(.activity(.resources(surfaceID: try pane().surfaceID)))
+        case "pane.kill_tree":
+            guard arguments["confirmed"]?.bool == true else { throw APIPlanError(code: .badArguments, message: "Confirm termination of the shell and its programs before signaling this tree") }
+            return .request(.activity(.terminateTree(surfaceID: try pane().surfaceID, rootGeneration: try text("generation"))))
+        case "notification.status": return .query(.activity(.notifications(.status)))
+        case "notification.configure":
+            guard let value = arguments["settings"]?.object else { throw APIPlanError(code: .badArguments, message: "Typed notification settings are required") }
+            let data = try JSONSerialization.data(withJSONObject: value.mapValues(\.jsonValue))
+            let settings = try JSONDecoder().decode(NotificationPolicySettings.self, from: data)
+            try settings.validate()
+            return .request(.activity(.notifications(.configure(settings))))
+        case "agent.mute":
+            let run = try arguments["run"]?.string.map(uuid)
+            return .request(.activity(.notifications(.control(AgentNotificationControl(surfaceID: try pane().surfaceID, runID: run, muted: arguments["muted"]?.bool ?? false)))))
+        case "power.status": return .query(.activity(.power(.status)))
+        case "power.mode":
+            guard let mode = AwakeMode(rawValue: try text("mode")) else { throw APIPlanError(code: .badArguments, message: "Power mode must be auto, on, or off") }
+            return .request(.activity(.power(.mode(mode))))
+        case "power.configure":
+            let data = try JSONSerialization.data(withJSONObject: arguments.mapValues(\.jsonValue))
+            let settings = try JSONDecoder().decode(PowerSettings.self, from: data)
+            try settings.validate()
+            return .request(.activity(.power(.configure(settings))))
+        case "profile.list": return .query(.activity(.configure(nil)))
+        case "profile.configure":
+            guard let value = arguments["settings"]?.object else { throw APIPlanError(code: .badArguments, message: "Typed profile settings are required") }
+            let data = try JSONSerialization.data(withJSONObject: value.mapValues(\.jsonValue))
+            let settings = try JSONDecoder().decode(ActivitySettings.self, from: data)
+            try settings.validate()
+            return .request(.activity(.configure(settings)))
+        case "history.recover": return .request(.retryHistory)
+        case "usage.summary", "digest.get", "digest.repositories":
+            let days = arguments["days"]?.int ?? 1
+            guard (1...90).contains(days) else { throw APIPlanError(code: .badArguments, message: "days must be 1–90") }
+            let to = Date(timeIntervalSince1970: (floor(Date().timeIntervalSince1970 / 86400) + 1) * 86400)
+            let from = to.addingTimeInterval(-Double(days) * 86400)
+            if method == "digest.repositories" { return .query(.activity(.repositoryDigest(requestID: UUID(), from: from, to: to, offset: arguments["offset"]?.int ?? 0, limit: arguments["limit"]?.int ?? 20))) }
+            if method == "usage.summary" { return .query(.activity(.usage(from: from, to: to))) }
+            return .query(.activity(.digest(from: from, to: to, surfaceID: try arguments["surface"]?.string.map { try uuid($0).uuidString }, responseCapabilities: [DaemonStats.activityState, DaemonStats.agentIdentities])))
+        case "agent.list":
+            return .query(.activity(.list(hostID: try arguments["host"]?.string.map(uuid), surfaceID: try arguments["surface"]?.string.map { try uuid($0).uuidString }, activeOnly: arguments["active"]?.bool ?? false, offset: arguments["offset"]?.int ?? 0, limit: arguments["limit"]?.int ?? 100, responseCapabilities: [DaemonStats.activityState, DaemonStats.agentIdentities])))
+        case "agent.session":
+            return .query(.activity(.session(hostID: try arguments["host"]?.string.map(uuid), runID: try uuid(text("run")), offset: arguments["offset"]?.int ?? 0, limit: arguments["limit"]?.int ?? 200, responseCapabilities: [DaemonStats.activityState, DaemonStats.agentIdentities])))
         case "attention.read":
             return .request(.acknowledgeAttention(surfaceID: try pane().surfaceID))
         case "attention.snooze":
@@ -821,7 +1034,7 @@ public enum HarnessAPI {
     }
 
     private static func method(_ name: String, _ summary: String, _ parameters: APIJSONSchema, _ result: APIJSONSchema) -> APIMethod {
-        APIMethod(name: name, summary: summary, parameters: parameters, result: result)
+        APIMethod(name: name, summary: summary, parameters: parameters, result: result, access: .existing(name))
     }
 
     private static func object(_ properties: [String: APIJSONSchema], required: [String] = []) -> APIJSONSchema {

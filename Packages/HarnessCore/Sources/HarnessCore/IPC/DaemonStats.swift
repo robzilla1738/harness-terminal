@@ -6,6 +6,11 @@ public struct DaemonStats: Codable, Sendable {
     public var pid: Int32
     public var uptimeSeconds: Double
     public var surfaceCount: Int
+    /// Active pipe consumers plus bounded accepted-output drains owned by the host.
+    public var pipeConsumerCount: Int?
+    public var pendingProcessRetirements: Int?
+    public var shutdownPending: Bool?
+    public var pendingDaemonRetirements: Int?
     public var totalScrollbackBytes: Int
     public var clientCount: Int
     public var subscriberCount: Int
@@ -14,11 +19,22 @@ public struct DaemonStats: Codable, Sendable {
     /// daemons predating the version handshake never send it; IPC payloads are JSON, so the
     /// missing key decodes as nil and an old client just ignores the new key.
     public var version: String?
-    /// Build number (`HarnessVersion.build`) of the running daemon — the handshake the app
-    /// and CLI compare against their own build to detect a stale daemon (issue #60).
+    /// Build number of the running daemon for component display and pending-update
+    /// information. Protocol and capability compatibility govern usable operations;
+    /// a build difference cannot authorize stopping programs.
     public var build: Int?
     /// Protocol features beyond the baseline (`attach-stream`). Nil from older daemons.
     public var capabilities: [String]?
+    public var protocolLevel: Int?
+    public var daemonPID: Int32?
+    public var sessionHostPID: Int32?
+    public var sessionHostBuild: Int?
+    public var sessionHostProtocolLevel: Int?
+    public var sessionHostCapabilities: [String]?
+    public var sessionHostVersion: String?
+    public var daemonAvailable: Bool?
+    public var historyProtection: HistoryProtection.Kind?
+    public var historyUnavailable: String?
     /// Idle surfaces whose ring is held compressed, and that ring's size stored vs raw.
     public var parkedSurfaceCount: Int?
     public var parkedStoredBytes: Int?
@@ -41,9 +57,15 @@ public struct DaemonStats: Codable, Sendable {
         parkedStoredBytes: Int? = nil,
         parkedRawBytes: Int? = nil,
         startupMillis: [String: Double]? = nil,
-        epoch: String? = nil
+        epoch: String? = nil,
+        protocolLevel: Int? = nil,
+        sessionHostPID: Int32? = nil,
+        sessionHostBuild: Int? = nil
     ) {
         self.epoch = epoch
+        self.protocolLevel = protocolLevel
+        self.sessionHostPID = sessionHostPID
+        self.sessionHostBuild = sessionHostBuild
         self.pid = pid
         self.uptimeSeconds = uptimeSeconds
         self.surfaceCount = surfaceCount
@@ -62,10 +84,58 @@ public struct DaemonStats: Codable, Sendable {
 }
 
 public extension DaemonStats {
+    static let sessionHost = "session-host-handover"
+    static let currentSessionHostProtocolLevel = 8
+    static let sessionHostWorker = "session-host-worker-v\(currentSessionHostProtocolLevel)"
+    static let workloadInput = "workload-stdin-v1"
+    static let clientCapabilities = "client-capabilities-v1"
+    static let notificationPolicy = "notification-policy-v1"
+    static let powerManagement = "power-management-v1"
+    static let commandOutput = "command-output-v1"
+    static let automaticResume = "pane-auto-resume-v1"
+    static let paneResume = "pane-resume-v1"
+    static let paneResources = "pane-resources-v1"
+    static let activityProfiles = "activity-profiles-v1"
+    static let historyRecovery = "history-recovery-v1"
+    static let usageDigest = "usage-digest-v1"
+    static let repositoryDigest = "repository-digest-v1"
+    static let agentIdentities = "agent-identities-v1"
+    static let activityState = "activity-state-v2"
+    static let terminalGeometry = "terminal-geometry-events-v1"
+    static let paneContent = "pane-content-v1"
+    static let activityHistory = "activity-history-v1"
+    static let guardedRestart = "guarded-restart"
+    static var currentCapabilities: [String] {
+        [agentIdentities, mobileCompanion, attachStream, paneAttention, sessionLibrary, outputSearch, filteredOutputSearch, managedWorktrees, fanout, schedules, hookPolicy, aiSummaries, pathSearch, guardedRestart, activityHistory, activityState, paneContent, terminalGeometry, usageDigest, repositoryDigest, paneResources, historyRecovery, activityProfiles, paneResume, automaticResume, commandOutput, powerManagement, notificationPolicy, clientCapabilities]
+    }
+    var mayRestartWithoutInterruption: Bool { surfaceCount == 0 && (pipeConsumerCount ?? 0) == 0 && (pendingProcessRetirements ?? 0) == 0 && (pendingDaemonRetirements ?? 0) == 0 }
+    var updateAvailable: Bool {
+        daemonUpdateAvailable || sessionHostUpdateAvailable
+    }
+    var daemonUpdateAvailable: Bool { build != HarnessVersion.build || !Set(Self.currentCapabilities).isSubset(of: Set(capabilities ?? [])) }
+    var sessionHostUpdateAvailable: Bool {
+        guard sessionHostPID != nil else { return false }
+        return sessionHostBuild != HarnessVersion.build || sessionHostProtocolLevel != Self.currentSessionHostProtocolLevel
+    }
+    var compatibility: DaemonCompatibility {
+        if let protocolLevel {
+            return protocolLevel == HarnessVersion.protocolLevel ? .compatible : .incompatible
+        }
+        // The verified 2.1.0 wire contract. Do not infer future compatibility from build numbers.
+        if build == 132, capabilities?.contains(Self.attachStream) == true { return .compatible }
+        return .unknown
+    }
+    func supports(_ capability: String) -> Bool { capabilities?.contains(capability) == true }
     static let mobileCompanion = "mobile-companion-v1"
     static let attachStream = "attach-stream"
     static let paneAttention = "pane-attention"
     static let sessionLibrary = "session-library"
+    static let hookPolicy = "hook-policy-v1"
+    static let aiSummaries = "ai-summaries-v1"
+    static let schedules = "schedules-v1"
+    static let fanout = "fanout-v1"
+    static let managedWorktrees = "managed-worktrees-v1"
+    static let filteredOutputSearch = "filtered-output-search-v1"
     static let outputSearch = "output-search"
     static let pathSearch = "path-search"
 

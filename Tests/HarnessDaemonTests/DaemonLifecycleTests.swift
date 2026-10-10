@@ -47,15 +47,15 @@ final class DaemonLifecycleTests: XCTestCase {
         XCTAssertEqual(decision, .refuse)
     }
 
-    /// Alive but path unresolvable (e.g. EPERM on a foreign-owned PID) is treated as not-ours.
-    func testLiveButUnresolvablePathIsStale() {
+    /// Unresolvable live owners are preserved even when a health probe fails.
+    func testLiveButUnresolvablePathRefuses() {
         let decision = DaemonLifecycle.priorInstanceDecision(
             priorPID: 4242,
             ownPID: 1,
             isAlive: { _ in true },
             executablePath: { _ in nil }
         )
-        XCTAssertEqual(decision, .stale)
+        XCTAssertEqual(decision, .refuse)
     }
 
     /// Our own PID in the file is never a competing instance.

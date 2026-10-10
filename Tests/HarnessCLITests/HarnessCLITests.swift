@@ -39,7 +39,7 @@ final class HarnessCLITests: XCTestCase {
     /// bidirectional drift guard below then fails until the catalog matches.
     static let dispatchVerbs: Set<String> = [
         "color-check", "theme-preview", "remote", "socket-path", "run", "daemon", "version",
-        "mobile-bridge", "mobile-setup", "pair",
+        "mobile-bridge", "mobile-setup", "mobile-key", "pair", "plugin", "worktree",
         "ls", "inspect", "new", "wait", "keymap", "actions",
         "list-workspaces", "list-surfaces", "list-sessions", "list-agents", "doctor",
         "completions", "list-windows", "list-panes", "has-session", "list-commands",
@@ -56,9 +56,11 @@ final class HarnessCLITests: XCTestCase {
         "rotate-window", "break-pane", "join-pane", "move-pane", "renumber-windows",
         "respawn-pane", "clear-history", "select-pane", "set-option", "show-options", "set-environment",
         "show-environment", "bind-hook", "unbind-hook", "list-hooks", "display-message",
-        "kill-server", "start-server", "show-messages",
+        "kill-server", "daemon-replace", "daemon-restart", "start-server", "show-messages",
         "size-mode", "take-surface", "save-layout", "restore-layout",
         "events", "process", "find-files", "copy-file", "api", "config", "do",
+        "import", "uninstall", "schedule", "summary", "hook-policy", "fanout", "worktree", "plugin", "recording", "mobile-key",
+        "agent-hook", "agents", "history-recover", "awake", "notifications", "resume-agent", "activity-profile", "usage", "digest", "mcp", "mcp-install",
     ]
 
     /// Catalog verbs that are *intentionally* not dispatch cases (e.g. a completion-only stub for a

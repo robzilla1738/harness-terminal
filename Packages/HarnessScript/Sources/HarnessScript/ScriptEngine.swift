@@ -279,7 +279,7 @@ public final class ScriptEngine {
     /// generated from `HarnessAPI.methods` so Lua can't drift from the API, and the layout
     /// builders for `session.create` / `pane.split`. `horizontal` is side by side.
     private func installGenerated() {
-        let names = HarnessAPI.methods.map(\.name).filter { $0.contains(".") }
+        let names = HarnessAPI.methods.filter { $0.access.exposures.contains(.lua) }.map(\.name).filter { $0.contains(".") }
         let list = names.map { "\"\($0)\"" }.joined(separator: ", ")
         let prelude = """
         local h = harness
@@ -571,6 +571,9 @@ public final class ScriptEngine {
             return 3
         }
         guard let method = Self.luaString(state, 1) else { return failure("harness.call needs a method name", .badArguments) }
+        guard HarnessAPI.method(named: method)?.access.exposures.contains(.lua) == true else {
+            return failure("\(method) is not exposed to Lua", .badArguments)
+        }
         var arguments: [String: APIArgument] = [:]
         switch lua_type(state, 2) {
         case LUA_TNONE, LUA_TNIL: break

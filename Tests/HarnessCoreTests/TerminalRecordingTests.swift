@@ -100,6 +100,11 @@ final class TerminalRecordingTests: XCTestCase {
         let joined = steps.reduce(Data()) { $0 + $1.data }
         XCTAssertEqual(joined, Data("ABC".utf8))
     }
+    func testReplayMalformedExtremeTimestampsDoNotOverflow() {
+        let events: [RecordingEvent] = [.input(timeMs: Int.min, data: Data()), .resize(timeMs: Int.max, rows: 24, cols: 80), .output(timeMs: Int.max, data: Data("fixture".utf8))]
+        XCTAssertEqual(TerminalReplay.steps(from: events).first?.delayMs, Int.max)
+        XCTAssertEqual(TerminalReplay.steps(from: events, honorTiming: false).first?.delayMs, 0)
+    }
 
     func testNoTimingZeroesAllDelays() {
         let events: [RecordingEvent] = [

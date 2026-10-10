@@ -27,8 +27,8 @@ final class AgentHookInstallerTests: XCTestCase {
         XCTAssertFalse(result.replacedInvalidJSON)
         XCTAssertTrue(AgentHookInstaller.isInstalled(agent: .claudeCode, homeOverride: home))
         let text = try String(contentsOf: result.path, encoding: .utf8)
-        XCTAssertTrue(text.contains("harness-cli notify"))
-        XCTAssertTrue(text.contains("]7501;"), "hooks emit OSC 7501 beside notify")
+        XCTAssertTrue(text.contains("harness-cli agent-hook"))
+        XCTAssertFalse(text.contains("]7501;"), "machine-readable hook output must remain quiet")
     }
 
     func testInstallPreservesExistingUserConfig() throws {
@@ -49,7 +49,7 @@ final class AgentHookInstallerTests: XCTestCase {
     func testReinstallIsIdempotent() throws {
         _ = try AgentHookInstaller.install(agent: .claudeCode, homeOverride: home)
         let again = try AgentHookInstaller.install(agent: .claudeCode, homeOverride: home)
-        XCTAssertNotNil(again.backedUp)
+        XCTAssertNil(again.backedUp)
         let data = try Data(contentsOf: again.path)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let hooks = json["hooks"] as? [String: Any]
@@ -60,15 +60,15 @@ final class AgentHookInstallerTests: XCTestCase {
     func testClaudeNotificationUsesStdinHookNotEnvVar() throws {
         let result = try AgentHookInstaller.install(agent: .claudeCode, homeOverride: home)
         let command = try claudeNotificationCommand(at: result.path)
-        XCTAssertTrue(command.contains("--from-hook"), "Notification body must come from stdin")
+        XCTAssertTrue(command.contains("--contract claude-hooks-2026-10"), "Notification body must come from stdin")
         // The PATH prefix must point at the platform's real install location — a hardcoded
         // macOS path in Linux-installed hooks made every notification silently vanish
         // (`harness-cli` was never on the hook's PATH).
         #if os(Linux)
         XCTAssertTrue(command.hasPrefix(
-            "PATH=\"${XDG_DATA_HOME:-$HOME/.local/share}/harness/bin:$PATH\" harness-cli notify"))
+            "PATH=\"${XDG_DATA_HOME:-$HOME/.local/share}/harness/bin:$PATH\" harness-cli agent-hook"))
         #else
-        XCTAssertTrue(command.hasPrefix("PATH=\"$HOME/Library/Application Support/Harness/bin:$PATH\" harness-cli notify"))
+        XCTAssertTrue(command.hasPrefix("PATH=\"$HOME/Library/Application Support/Harness/bin:$PATH\" harness-cli agent-hook"))
         #endif
         XCTAssertFalse(command.contains("HARNESS_NOTIFY_MESSAGE"), "the dangling env var must be gone")
     }
@@ -101,7 +101,7 @@ final class AgentHookInstallerTests: XCTestCase {
         let notification = try XCTUnwrap(hooks["Notification"] as? [Any])
         XCTAssertEqual(notification.count, 1, "old broken entry replaced, not appended")
         let command = try claudeNotificationCommand(at: url)
-        XCTAssertTrue(command.contains("--from-hook"))
+        XCTAssertTrue(command.contains("--contract claude-hooks-2026-10"))
         XCTAssertFalse(command.contains("HARNESS_NOTIFY_MESSAGE"))
         // Unrelated config + the user's own non-Harness hook survive untouched.
         XCTAssertEqual(json["model"] as? String, "claude-opus")
@@ -115,7 +115,7 @@ final class AgentHookInstallerTests: XCTestCase {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let existing = #"""
         { "hooks": { "Notification": [
-          { "matcher": "*", "hooks": [ { "type": "command", "command": "say hello" } ] }
+          { "matcher": "*", "hooks": [ { "type": "command", "command": "say hello" }, { "type": "command", "command": "harness-cli notify --body old" } ] }
         ] } }
         """#
         try existing.write(to: url, atomically: true, encoding: .utf8)
@@ -130,7 +130,7 @@ final class AgentHookInstallerTests: XCTestCase {
                 .compactMap { ($0 as? [String: Any])?["command"] as? String }.first
         }
         XCTAssertTrue(commands.contains("say hello"))
-        XCTAssertTrue(commands.contains { $0.contains("--from-hook") })
+        XCTAssertTrue(commands.contains { $0.contains("--contract claude-hooks-2026-10") })
     }
 
     func testReinstallStaysSingleAndCorrected() throws {
@@ -140,7 +140,7 @@ final class AgentHookInstallerTests: XCTestCase {
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: try Data(contentsOf: url)) as? [String: Any])
         let notification = try XCTUnwrap((json["hooks"] as? [String: Any])?["Notification"] as? [Any])
         XCTAssertEqual(notification.count, 1)
-        XCTAssertTrue(try claudeNotificationCommand(at: url).contains("--from-hook"))
+        XCTAssertTrue(try claudeNotificationCommand(at: url).contains("--contract claude-hooks-2026-10"))
     }
 
     func testDetectInstalledAgentsFindsAgentByConfigDir() throws {
@@ -164,23 +164,26 @@ final class AgentHookInstallerTests: XCTestCase {
         let harness = notification.compactMap { entry -> String? in
             ((entry as? [String: Any])?["hooks"] as? [Any])?
                 .compactMap { ($0 as? [String: Any])?["command"] as? String }
-                .first { $0.contains("harness-cli notify") }
+                .first { $0.contains("harness-cli agent-hook") }
         }
         return try XCTUnwrap(harness.first)
     }
 
-    func testInvalidExistingJSONIsReplacedWithBackup() throws {
+    func testMalformedConfigurationAndChangedProposalRemainUntouched() throws {
         let url = try XCTUnwrap(AgentHookInstaller.hookConfigURL(for: .codex, homeOverride: home))
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try "not json at all".write(to: url, atomically: true, encoding: .utf8)
-
-        let result = try AgentHookInstaller.install(agent: .codex, homeOverride: home)
-        XCTAssertTrue(result.replacedInvalidJSON)
-        XCTAssertNotNil(result.backedUp)
-        // The written file is now valid JSON with our hook.
-        let data = try Data(contentsOf: url)
-        XCTAssertNoThrow(try JSONSerialization.jsonObject(with: data))
-        XCTAssertTrue(AgentHookInstaller.isInstalled(agent: .codex, homeOverride: home))
+        let original = Data("not json at all".utf8); try original.write(to: url)
+        let proposed = try AgentHookInstaller.prepare(agent: .codex, homeOverride: home)
+        XCTAssertTrue(proposed.needsManualMerge)
+        let result = try AgentHookInstaller.apply(proposed, homeOverride: home)
+        XCTAssertNil(result.backedUp); XCTAssertTrue(result.needsManualMerge)
+        XCTAssertEqual(try Data(contentsOf: url), original)
+        let valid = Data("{\"unrelated\":\"private value\"}".utf8); try valid.write(to: url)
+        let edit = try AgentHookInstaller.prepare(agent: .codex, homeOverride: home)
+        XCTAssertFalse(edit.diff.contains("private value"))
+        let changed = Data("{\"unrelated\":\"new value\"}".utf8); try changed.write(to: url)
+        XCTAssertThrowsError(try AgentHookInstaller.apply(edit, homeOverride: home))
+        XCTAssertEqual(try Data(contentsOf: url), changed)
     }
 
     func testUnsupportedAgentThrows() {
@@ -224,13 +227,13 @@ final class AgentHookInstallerTests: XCTestCase {
         _ = try AgentHookInstaller.install(agent: .cursor, homeOverride: home)
         var commands = try stopCommands()
         XCTAssertTrue(commands.contains("echo mine"))
-        XCTAssertEqual(commands.filter { $0.contains("harness-cli notify") }.count, 1)
+        XCTAssertEqual(commands.filter { $0.contains("harness-cli agent-hook") }.count, 1)
 
         // Reinstall converges to exactly one Harness entry (prune works), user entry intact.
         _ = try AgentHookInstaller.install(agent: .cursor, homeOverride: home)
         commands = try stopCommands()
         XCTAssertTrue(commands.contains("echo mine"))
-        XCTAssertEqual(commands.filter { $0.contains("harness-cli notify") }.count, 1)
+        XCTAssertEqual(commands.filter { $0.contains("harness-cli agent-hook") }.count, 1)
     }
 
     func testGrokWritesOwnFlatFileAndLeavesSiblingsAlone() throws {
@@ -246,7 +249,7 @@ final class AgentHookInstallerTests: XCTestCase {
         XCTAssertTrue(AgentHookInstaller.isInstalled(agent: .grok, homeOverride: home))
 
         let again = try AgentHookInstaller.install(agent: .grok, homeOverride: home)
-        XCTAssertNotNil(again.backedUp) // our own file existed → backed up before overwrite
+        XCTAssertNil(again.backedUp) // unchanged files are not rewritten
         XCTAssertEqual(try String(contentsOf: sibling, encoding: .utf8), #"{"pre-edit":"echo hi"}"#)
     }
 
@@ -258,9 +261,9 @@ final class AgentHookInstallerTests: XCTestCase {
         XCTAssertTrue(text.contains("session.idle"))
         XCTAssertTrue(text.contains("harness-cli notify"))
         XCTAssertTrue(AgentHookInstaller.isInstalled(agent: .openCode, homeOverride: home))
-        // Idempotent overwrite: reinstall backs up and reproduces the same plugin.
+        // Reinstallation leaves an unchanged plugin in place.
         let again = try AgentHookInstaller.install(agent: .openCode, homeOverride: home)
-        XCTAssertNotNil(again.backedUp)
+        XCTAssertNil(again.backedUp)
         XCTAssertEqual(try String(contentsOf: again.path, encoding: .utf8), text)
     }
 

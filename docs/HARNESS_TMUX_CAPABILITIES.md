@@ -91,7 +91,7 @@ Use this path for a fresh install.
 | Pane | Pane | One PTY-backed terminal inside a tab. |
 | Surface | PTY identity | The daemon-owned terminal behind a pane. |
 
-The daemon owns session state and every PTY. The app and `harness-cli` are
+The replaceable daemon owns session state; the stable session host owns every PTY. The app and `harness-cli` are
 clients. That is why shells keep running after the app quits, why another Harness
 window can reattach, and why `harness-cli attach-window` can render a full split
 layout in a plain terminal.

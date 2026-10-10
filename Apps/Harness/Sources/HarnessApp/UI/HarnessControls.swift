@@ -72,12 +72,19 @@ final class HarnessTextField: NSTextField {
         layer?.cornerCurve = .continuous
         layer?.borderWidth = 1
         translatesAutoresizingMaskIntoConstraints = false
-        heightAnchor.constraint(greaterThanOrEqualToConstant: 26).isActive = true
+        heightAnchor.constraint(greaterThanOrEqualToConstant: HarnessDesign.formControlHeight).isActive = true
         applyChrome()
+    }
+
+    convenience init(string: String) {
+        self.init()
+        stringValue = string
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    override var isEnabled: Bool { didSet { applyChrome() } }
 
     override func layout() {
         super.layout()
@@ -107,7 +114,59 @@ final class HarnessTextField: NSTextField {
         let c = HarnessChrome.current
         layer?.backgroundColor = c.surfaceElevated.cgColor
         layer?.borderColor = (focused ? c.focusRing : c.border).cgColor
-        textColor = c.textPrimary
+        textColor = c.textPrimary; alphaValue = isEnabled ? 1 : 0.45
+        if let placeholder = placeholderString {
+            placeholderAttributedString = NSAttributedString(string: placeholder, attributes: [.foregroundColor: c.textTertiary])
+        }
+    }
+}
+
+final class HarnessSecureTextFieldCell: NSSecureTextFieldCell {
+    private func inset(_ rect: NSRect) -> NSRect {
+        let height = cellSize(forBounds: rect).height
+        return NSRect(x: rect.minX + 8, y: rect.midY - height / 2, width: max(0, rect.width - 16), height: height)
+    }
+    override func drawInterior(withFrame rect: NSRect, in view: NSView) { super.drawInterior(withFrame: inset(rect), in: view) }
+    override func edit(withFrame rect: NSRect, in view: NSView, editor: NSText, delegate: Any?, event: NSEvent?) {
+        super.edit(withFrame: inset(rect), in: view, editor: editor, delegate: delegate, event: event)
+    }
+    override func select(withFrame rect: NSRect, in view: NSView, editor: NSText, delegate: Any?, start: Int, length: Int) {
+        super.select(withFrame: inset(rect), in: view, editor: editor, delegate: delegate, start: start, length: length)
+    }
+}
+
+@MainActor
+final class HarnessSecureTextField: NSSecureTextField {
+    private var focused = false
+    override class var cellClass: AnyClass? { get { HarnessSecureTextFieldCell.self } set {} }
+    init() {
+        super.init(frame: .zero)
+        isBezeled = false; isBordered = false; drawsBackground = false; focusRingType = .none
+        font = .systemFont(ofSize: 12); wantsLayer = true
+        layer?.cornerRadius = HarnessDesign.Radius.control; layer?.cornerCurve = .continuous; layer?.borderWidth = 1
+        translatesAutoresizingMaskIntoConstraints = false
+        heightAnchor.constraint(greaterThanOrEqualToConstant: HarnessDesign.formControlHeight).isActive = true
+        applyChrome()
+    }
+    convenience init(string: String) { self.init(); stringValue = string }
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+    override var isEnabled: Bool { didSet { applyChrome() } }
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { focused = true; applyChrome() }
+        return accepted
+    }
+    override func textDidEndEditing(_ notification: Notification) {
+        super.textDidEndEditing(notification); focused = false; applyChrome()
+    }
+    func applyChrome() {
+        let c = HarnessChrome.current
+        layer?.backgroundColor = c.surfaceElevated.cgColor
+        layer?.borderColor = (focused ? c.focusRing : c.border).cgColor
+        textColor = c.textPrimary; alphaValue = isEnabled ? 1 : 0.45
+        if let placeholder = placeholderString {
+            placeholderAttributedString = NSAttributedString(string: placeholder, attributes: [.foregroundColor: c.textTertiary])
+        }
     }
 }
 
@@ -161,7 +220,7 @@ final class HarnessSearchField: NSView, NSTextFieldDelegate {
         addSubview(magnifier)
         addSubview(field)
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 28),
+            heightAnchor.constraint(equalToConstant: HarnessDesign.formControlHeight),
             magnifier.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 9),
             magnifier.centerYAnchor.constraint(equalTo: centerYAnchor),
             magnifier.widthAnchor.constraint(equalToConstant: 13),
@@ -194,10 +253,13 @@ final class HarnessSearchField: NSView, NSTextFieldDelegate {
     func applyChrome() {
         let c = HarnessChrome.current
         layer?.backgroundColor = c.surfaceElevated.cgColor
-        layer?.borderColor = c.border.cgColor
+        layer?.borderColor = (window?.firstResponder === field.currentEditor() && field.currentEditor() != nil ? c.focusRing : c.border).cgColor
         magnifier.contentTintColor = c.textTertiary
         field.textColor = c.textPrimary
     }
+
+    func controlTextDidBeginEditing(_ obj: Notification) { applyChrome() }
+    func controlTextDidEndEditing(_ obj: Notification) { applyChrome() }
 
     func controlTextDidChange(_ obj: Notification) {
         onChange?(field.stringValue)
@@ -207,7 +269,7 @@ final class HarnessSearchField: NSView, NSTextFieldDelegate {
 // MARK: - Keyboard focus
 
 /// Keyboard-focus outline for the custom controls below: a 2pt ring in the theme's `focusRing`
-/// color (the cursor accent, never the system blue) drawn just outside the control's shape.
+/// color (the neutral interface accent) drawn just outside the control's shape.
 /// Like AppKit's own buttons, these controls take focus only when Full Keyboard Access is on.
 @MainActor
 final class HarnessFocusRing {
@@ -268,6 +330,8 @@ final class HarnessToggle: NSControl {
             invalidateIntrinsicContentSize()
         }
     }
+
+    override var isEnabled: Bool { didSet { applyChrome() } }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -876,10 +940,14 @@ final class HarnessSelect: NSControl {
     private var isFocused = false { didSet { needsLayout = true } }
 
     var titleOfSelectedItem: String? { selected }
+    var emptyTitle = "No options available" { didSet { applyChrome() } }
+    var onSelection: ((String) -> Void)?
     /// Placeholder for the popover's filter field.
     var searchPlaceholder = "Search"
     /// The leading items (the featured themes) sit above a hairline when the list is unfiltered.
     var featuredCount = 0
+
+    override var isEnabled: Bool { didSet { applyChrome() } }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -900,7 +968,7 @@ final class HarnessSelect: NSControl {
         addSubview(titleLabel)
         addSubview(chevron)
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 28),
+            heightAnchor.constraint(equalToConstant: HarnessDesign.formControlHeight),
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: chevron.leadingAnchor, constant: -8),
@@ -915,13 +983,22 @@ final class HarnessSelect: NSControl {
     required init?(coder: NSCoder) { fatalError() }
 
     // Popup-compatible shims.
-    func removeAllItems() { items.removeAll() }
-    func addItems(withTitles titles: [String]) { items.append(contentsOf: titles) }
+    var indexOfSelectedItem: Int { selected.flatMap { items.firstIndex(of: $0) } ?? -1 }
+    func selectItem(at index: Int) {
+        guard items.indices.contains(index) else { return }
+        selectItem(withTitle: items[index])
+    }
+    func removeAllItems() { items.removeAll(); selected = nil; applyChrome(); setAccessibilityValue(emptyTitle) }
+    func addItems(withTitles titles: [String]) {
+        items.append(contentsOf: titles)
+        if selected == nil, let first = items.first { selectItem(withTitle: first) }
+    }
     func selectItem(withTitle title: String) {
         guard items.contains(title) else { return }
         selected = title
         titleLabel.stringValue = title
         setAccessibilityValue(title)
+        applyChrome()
     }
 
     override func layout() {
@@ -978,7 +1055,7 @@ final class HarnessSelect: NSControl {
     override func accessibilityPerformPress() -> Bool { showPopover(); return true }
 
     private func showPopover() {
-        guard let window, isEnabled else { return }
+        guard let window, isEnabled, !items.isEmpty else { return }
         popover?.dismiss() // never leave a previous popover (+ its event monitor) dangling
         let pop = HarnessSelectPopover(
             items: items, selected: selected, placeholder: searchPlaceholder, featuredCount: featuredCount
@@ -987,6 +1064,8 @@ final class HarnessSelect: NSControl {
             self.selected = choice
             self.titleLabel.stringValue = choice
             self.setAccessibilityValue(choice)
+            self.applyChrome()
+            self.onSelection?(choice)
             if let action { _ = NSApp.sendAction(action, to: self.target, from: self) }
         }
         // Release the popover (and its `allItems` array) immediately when it closes, rather
@@ -1003,9 +1082,11 @@ final class HarnessSelect: NSControl {
 
     func applyChrome() {
         let c = HarnessChrome.current
+        alphaValue = isEnabled ? 1 : 0.45
         layer?.backgroundColor = (isHovered ? c.rowHoverFill : c.surfaceElevated).cgColor
         layer?.borderColor = (isHovered ? c.borderStrong : c.border).cgColor
-        titleLabel.textColor = c.textPrimary
+        titleLabel.stringValue = selected ?? emptyTitle
+        titleLabel.textColor = selected == nil ? c.textTertiary : c.textPrimary
         chevron.contentTintColor = c.textTertiary
     }
 }

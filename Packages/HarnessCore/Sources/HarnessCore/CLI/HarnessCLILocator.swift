@@ -8,7 +8,7 @@ public enum HarnessCLILocator {
     ) -> URL? {
         var candidates: [URL] = []
         if let bundleExecutable {
-            candidates.append(bundleExecutable.deletingLastPathComponent().appendingPathComponent("harness-cli"))
+            candidates.append(HarnessToolLocator.companion("harness-cli", to: bundleExecutable))
         }
         candidates.append(HarnessPaths.applicationSupport.appendingPathComponent("bin").appendingPathComponent("harness-cli"))
         candidates.append(URL(fileURLWithPath: "/opt/homebrew/bin/harness-cli"))
@@ -34,11 +34,13 @@ public struct ScriptActionResult: Equatable, Sendable {
 public enum ScriptRequest: Equatable, Sendable {
     case action(String)
     case binding(String)
+    case plugin(id: String, action: String)
 
     var label: String {
         switch self {
         case let .action(name): return "action \(name)"
         case let .binding(spec): return "binding \(spec)"
+        case let .plugin(id, action): return "plugin \(id) action \(action)"
         }
     }
 }
@@ -48,6 +50,7 @@ public enum ScriptActionRunner {
         switch request {
         case let .action(name): return ["do", "--action", name, "--origin", origin.rawValue]
         case let .binding(spec): return ["do", "--binding", spec, "--origin", origin.rawValue]
+        case let .plugin(id, action): return ["plugin", "run", "--id", id, "--action", action, "--origin", origin.rawValue]
         }
     }
 

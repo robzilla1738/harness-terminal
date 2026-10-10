@@ -47,7 +47,7 @@ public struct SessionEditor: Sendable {
         return session.id
     }
 
-    public mutating func addTab(to workspaceID: WorkspaceID, cwd: String? = nil) -> TabID? {
+    public mutating func addTab(to workspaceID: WorkspaceID, cwd: String? = nil, rootPane: PaneNode? = nil) -> TabID? {
         guard let workspaceIndex = snapshot.workspaces.firstIndex(where: { $0.id == workspaceID }) else {
             return nil
         }
@@ -59,6 +59,7 @@ public struct SessionEditor: Sendable {
         let sessionIndex = snapshot.workspaces[workspaceIndex].sessions.firstIndex { $0.id == activeSessionID } ?? 0
         let tab = Tab(
             cwd: existingWorkingDirectory(cwd),
+            rootPane: rootPane,
             sortOrder: snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs.count
         )
         snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs.append(tab)
@@ -86,6 +87,23 @@ public struct SessionEditor: Sendable {
         snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex] = tab
         bumpRevision()
         return newPaneID
+    }
+
+    @discardableResult
+    public mutating func setPaneContent(surfaceID: SurfaceID, content: PaneContent) -> Bool {
+        var found = false
+        for wi in snapshot.workspaces.indices {
+            for si in snapshot.workspaces[wi].sessions.indices {
+                for ti in snapshot.workspaces[wi].sessions[si].tabs.indices {
+                    let changed = snapshot.workspaces[wi].sessions[si].tabs[ti].rootPane.updateLeaf(surfaceKey: surfaceID.uuidString) {
+                        $0.content = content
+                        if !content.isTerminal { $0.command = nil; $0.shell = nil; $0.activity = nil; $0.lastAgentRunID = nil; $0.resumeAutomatically = nil }
+                    }
+                    found = found || changed
+                }
+            }
+        }
+        if found { bumpRevision() }; return found
     }
 
     /// Commit the active pane for a tab server-side, rolling the previous active pane
@@ -1180,7 +1198,7 @@ public struct SessionEditor: Sendable {
         }
         guard let dest = paneLocation(paneID: destPaneID) else { return nil }
         var tab = snapshot.workspaces[dest.workspaceIndex].sessions[dest.sessionIndex].tabs[dest.tabIndex]
-        let newLeaf = PaneLeaf(id: UUID(), surfaceID: leaf.surfaceID, daemonSurfaceID: leaf.daemonSurfaceID)
+        var newLeaf = leaf; newLeaf.id = UUID()
         insertSplit(&tab.rootPane, at: destPaneID, with: newLeaf, direction: direction, placement: placement)
         // Focus follows the joined pane into the destination tab.
         tab.lastActivePaneID = tab.activePaneID

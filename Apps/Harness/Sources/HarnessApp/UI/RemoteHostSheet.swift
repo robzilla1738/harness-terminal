@@ -22,10 +22,10 @@ final class RemoteHostSheet: NSWindowController, NSTextFieldDelegate {
     }
 
     private let editing: RemoteHost?
-    private let nameField = NSTextField()
-    private let targetField = NSTextField()
-    private let optionsField = NSTextField()
-    private let socketField = NSTextField()
+    private let nameField = HarnessTextField()
+    private let targetField = HarnessTextField()
+    private let optionsField = HarnessTextField()
+    private let socketField = HarnessTextField()
     private let detectButton = HarnessPillButton(title: "Detect", kind: .secondary)
     private let testButton = HarnessPillButton(title: "Test Connection", kind: .secondary)
     private let saveButton = HarnessPillButton(title: "Save & Connect")
@@ -62,6 +62,17 @@ final class RemoteHostSheet: NSWindowController, NSTextFieldDelegate {
             nameEdited = !seed.name.isEmpty
         }
         updateButtons()
+        NotificationCenter.default.addObserver(self, selector: #selector(themeChanged(_:)), name: NotificationBus.shared.snapshotChanged, object: nil)
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+    @objc private func themeChanged(_ notification: Notification) {
+        guard notification.userInfo?["chromeChanged"] as? Bool == true, let content = window?.contentView else { return }
+        let c = HarnessChrome.current
+        window?.appearance = NSAppearance(named: c.isDark ? .darkAqua : .aqua)
+        window?.backgroundColor = c.sidebarBackground
+        content.layer?.backgroundColor = c.sidebarBackground.cgColor
+        HarnessToolPage.style(content)
     }
 
     @available(*, unavailable)
@@ -82,34 +93,11 @@ final class RemoteHostSheet: NSWindowController, NSTextFieldDelegate {
         intro.font = .systemFont(ofSize: 12)
         intro.textColor = chrome.textSecondary
 
-        func field(_ field: NSTextField, placeholder: String) -> NSView {
+        func field(_ field: HarnessTextField, placeholder: String) -> NSView {
             field.delegate = self
-            field.font = .systemFont(ofSize: 13)
-            field.textColor = chrome.textPrimary
-            field.isBordered = false
-            field.isBezeled = false
-            field.drawsBackground = false
-            field.focusRingType = .none
-            field.placeholderAttributedString = NSAttributedString(
-                string: placeholder,
-                attributes: [.foregroundColor: chrome.textTertiary, .font: field.font!]
-            )
-            field.translatesAutoresizingMaskIntoConstraints = false
-            let container = NSView()
-            container.wantsLayer = true
-            container.layer?.backgroundColor = chrome.surfaceElevated.cgColor
-            container.layer?.borderColor = chrome.border.cgColor
-            container.layer?.borderWidth = 1
-            container.layer?.cornerRadius = HarnessDesign.Radius.card
-            container.layer?.cornerCurve = .continuous
-            container.addSubview(field)
-            NSLayoutConstraint.activate([
-                container.heightAnchor.constraint(equalToConstant: 34),
-                field.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 10),
-                field.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
-                field.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            ])
-            return container
+            field.placeholderString = placeholder
+            field.setAccessibilityLabel(placeholder)
+            return field
         }
         let targetInput = field(targetField, placeholder: "user@host or SSH alias")
         let nameInput = field(nameField, placeholder: "Name shown in the sidebar")
@@ -196,16 +184,6 @@ final class RemoteHostSheet: NSWindowController, NSTextFieldDelegate {
     }
 
     // MARK: - Input
-
-    func controlTextDidBeginEditing(_ obj: Notification) {
-        guard let field = obj.object as? NSTextField else { return }
-        field.superview?.layer?.borderColor = HarnessChrome.current.focusRing.cgColor
-    }
-
-    func controlTextDidEndEditing(_ obj: Notification) {
-        guard let field = obj.object as? NSTextField else { return }
-        field.superview?.layer?.borderColor = HarnessChrome.current.border.cgColor
-    }
 
     func controlTextDidChange(_ obj: Notification) {
         guard let field = obj.object as? NSTextField else { return }

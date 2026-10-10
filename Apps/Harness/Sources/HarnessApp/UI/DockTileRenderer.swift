@@ -66,8 +66,7 @@ private final class DockTileView: NSView {
             Self.color(for: mark.rank).setStroke()
             ring.stroke()
             let icon = AgentIconRenderer.templateOrMonogramImage(for: mark.kind, size: side * 0.55)
-            let tint = NSColor.fromHex(SessionCoordinator.shared.settings.agentColorHex(for: mark.kind)) ?? .white
-            Self.tinted(icon, tint).draw(in: disc.insetBy(dx: side * 0.225, dy: side * 0.225))
+            Self.tinted(icon, .white).draw(in: disc.insetBy(dx: side * 0.225, dy: side * 0.225))
         }
     }
 

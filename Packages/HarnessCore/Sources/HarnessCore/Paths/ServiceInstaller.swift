@@ -23,9 +23,11 @@ public struct ServiceInstallReport: Sendable {
 public protocol ServiceInstaller: Sendable {
     @discardableResult
     func install(daemonPath: URL, harnessHome: URL) throws -> ServiceInstallReport
-    func uninstall()
+    /// Apply staged changes after an explicitly authorized or atomic empty shutdown.
+    /// Still refuses to interrupt a live or uncertain owner.
+    func activate(daemonPath: URL, harnessHome: URL) throws -> ServiceInstallReport
+    func uninstall() throws
     var isInstalled: Bool { get }
-    func relaunch()
     /// Human-readable backend name for diagnostics ("launchd" / "systemd --user").
     var backendName: String { get }
 }
@@ -49,7 +51,15 @@ public struct LaunchdServiceInstaller: ServiceInstaller {
 
     @discardableResult
     public func install(daemonPath: URL, harnessHome: URL = HarnessPaths.applicationSupport) throws -> ServiceInstallReport {
-        let report = try LaunchAgentInstaller.install(daemonPath: daemonPath, harnessHome: harnessHome)
+        try prepare(daemonPath: daemonPath, harnessHome: harnessHome, activateChanges: false)
+    }
+
+    public func activate(daemonPath: URL, harnessHome: URL = HarnessPaths.applicationSupport) throws -> ServiceInstallReport {
+        try prepare(daemonPath: daemonPath, harnessHome: harnessHome, activateChanges: true)
+    }
+
+    private func prepare(daemonPath: URL, harnessHome: URL, activateChanges: Bool) throws -> ServiceInstallReport {
+        let report = try LaunchAgentInstaller.install(daemonPath: daemonPath, harnessHome: harnessHome, activateChanges: activateChanges)
         return ServiceInstallReport(
             unitPath: report.plistPath,
             daemonPath: report.daemonPath,
@@ -58,7 +68,6 @@ public struct LaunchdServiceInstaller: ServiceInstaller {
         )
     }
 
-    public func uninstall() { LaunchAgentInstaller.uninstall() }
+    public func uninstall() throws { try LaunchAgentInstaller.uninstall() }
     public var isInstalled: Bool { LaunchAgentInstaller.isInstalled }
-    public func relaunch() { LaunchAgentInstaller.relaunch() }
 }

@@ -30,6 +30,27 @@ extension RealPty {
         }
     }
 }
+extension SessionPty {
+    func mobileHistorySnapshot() -> MobileHistorySnapshot? {
+        // Take rows and link definitions under the same parser lock: OSC 8 ids must not
+        // be resolved against a different generation of the terminal.
+        withMobileHistory { term in
+            let text = term.textSnapshot()
+            guard text.lineCount <= 100_000, text.lineCount * term.cols <= 1_000_000 else { return nil }
+            var links: [UInt32: String] = [:]
+            var cells = 0
+            for index in 0..<text.lineCount {
+                let row = text.line(index)
+                cells += row.count
+                guard cells <= 1_000_000 else { return nil }
+                for cell in row where cell.hyperlinkID != 0 && links[cell.hyperlinkID] == nil {
+                    links[cell.hyperlinkID] = term.hyperlinkURL(id: cell.hyperlinkID)
+                }
+            }
+            return MobileHistorySnapshot(text: text, hyperlinks: links, cellCount: cells)
+        }
+    }
+}
 
 extension SurfaceRegistry {
     func matchedMobileHistorySnapshot(_ match: OutputSearchMatch, revision: Int, cancelled: FlagBox) -> MobileHistorySnapshot? {

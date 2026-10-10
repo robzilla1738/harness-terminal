@@ -152,7 +152,7 @@ extension HarnessCLI {
     /// workspace/session/tab/pane, surface id, name, state, and last-activity age.
     /// `--waiting` filters to agents blocking on you; `--json` emits the machine-readable shape.
     static func printAgents(_ args: [String], client: DaemonClient) throws {
-        let response = try checkedRequest(client, .listAgents)
+        let response = try checkedRequest(client, .listAgents(capabilities: [DaemonStats.agentIdentities]))
         guard case let .agents(items) = response else { throw DaemonClientError.unexpectedResponse }
         let filtered = args.contains("--waiting") ? items.filter(\.waiting) : items
         try emit(filtered, args) {

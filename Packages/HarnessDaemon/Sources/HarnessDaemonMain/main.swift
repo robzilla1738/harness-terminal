@@ -130,6 +130,10 @@ nonisolated(unsafe) private var signalSources: [DispatchSourceSignal] = []
 /// the `KeepAlive` supervisor thrashing. We only refuse when the live PID is actually a
 /// HarnessDaemon binary; `DaemonServer.start()`'s socket ping is the authoritative guard.
 private func detectStaleInstance() {
+    if case .uncertain = DaemonOwnership.probe() {
+        daemonLog("session-service ownership is uncertain — refusing startup without creating shells or changing stores")
+        exit(1)
+    }
     guard FileManager.default.fileExists(atPath: HarnessPaths.daemonPIDURL.path) else { return }
     guard let raw = try? String(contentsOf: HarnessPaths.daemonPIDURL, encoding: .utf8),
           let priorPID = pid_t(raw.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -154,10 +158,61 @@ private func detectStaleInstance() {
     }
 }
 
+if CommandLine.arguments.dropFirst().first == "--terminal-pipe-worker" { exit(TerminalPipeWorker.runWorker()) }
+
+/// Parent-loss cleanup only unlinks the socket inode this worker actually bound.
+/// It performs no layout/history flush and never touches the owner's public socket.
+private final class WorkerSocketOwnership: @unchecked Sendable {
+    private let lock = NSLock()
+    private var owned: (path: String, device: dev_t, inode: ino_t)?
+    func record(_ url: URL?) {
+        guard let url else { return }; var info = stat()
+        guard lstat(url.path, &info) == 0, info.st_mode & S_IFMT == S_IFSOCK, info.st_uid == getuid() else { return }
+        lock.lock(); owned = (url.path, info.st_dev, info.st_ino); lock.unlock()
+    }
+    func removeOwnedSocket() {
+        lock.lock(); let owned = owned; lock.unlock()
+        guard let owned else { return }; var info = stat()
+        if lstat(owned.path, &info) == 0, info.st_dev == owned.device, info.st_ino == owned.inode { _ = unlink(owned.path) }
+    }
+}
+private let workerSocketOwnership = WorkerSocketOwnership()
+
 // MARK: - Bootstrap
 
-detectStaleInstance()
-writePIDFile()
+if CommandLine.arguments.dropFirst().contains("--search-regex-worker") { exit(IsolatedRegex.runWorker()) }
+if CommandLine.arguments.dropFirst().first == "--managed-git-worker" { exit(ManagedGitWorker.runWorker()) }
+SessionHostBootstrap.enterOwnerIfAvailable()
+nonisolated(unsafe) private var retainedParentWatch: (any DispatchSourceProtocol)?
+let hosted = ProcessInfo.processInfo.environment["HARNESS_SESSION_HOST_SOCKET"] != nil
+let instanceLock: DaemonInstanceLock?
+do { instanceLock = hosted ? nil : try DaemonInstanceLock() }
+catch { fputs("HarnessDaemon: cannot acquire exclusive ownership of this home (\(error)); refusing startup\n", harnessStderr); exit(1) }
+if !hosted { detectStaleInstance(); writePIDFile() }
+let mutationLease: DaemonMutationLease?
+if hosted {
+    let environment = ProcessInfo.processInfo.environment
+    guard let parent = environment["HARNESS_SESSION_HOST_PID"].flatMap(Int32.init), parent > 1,
+          let identity = environment["HARNESS_SESSION_HOST_IDENTITY"], getppid() == parent, ProcessScan.generation(parent) == identity else {
+        fputs("HarnessDaemon: hosted worker parent identity could not be verified; no stores or programs were mutated.\n", harnessStderr); exit(1)
+    }
+    // Parent loss exits immediately, rather than flushing stale state after another
+    // host recovers. The write-lease descriptor remains held until all threads exit.
+    #if canImport(Darwin)
+    let parentWatch = DispatchSource.makeProcessSource(identifier: parent, eventMask: .exit, queue: .global())
+    parentWatch.setEventHandler { workerSocketOwnership.removeOwnedSocket(); _exit(0) }; parentWatch.resume()
+    #else
+    let parentWatch = DispatchSource.makeTimerSource(queue: .global())
+    parentWatch.schedule(deadline: .now(), repeating: 0.25)
+    parentWatch.setEventHandler { if getppid() != parent { workerSocketOwnership.removeOwnedSocket(); _exit(0) } }; parentWatch.resume()
+    #endif
+    // Catch a parent that exited between the identity check and watcher arming.
+    guard getppid() == parent, ProcessScan.generation(parent) == identity else { _exit(0) }
+    do { mutationLease = try DaemonMutationLease(initiallyActive: environment["HARNESS_DAEMON_WARM"] != "1") }
+    catch { fputs("HarnessDaemon: another worker holds the mutation lease; refusing activation without changing stores.\n", harnessStderr); exit(1) }
+    // Keep the source alive for the executable's complete runLoop lifetime.
+    retainedParentWatch = parentWatch
+} else { mutationLease = nil }
 daemonLog("HarnessDaemon starting (HARNESS_HOME=\(HarnessPaths.applicationSupport.path))")
 
 // Ignore SIGPIPE process-wide: a PTY master or socket write that races a closing peer would
@@ -165,7 +220,8 @@ daemonLog("HarnessDaemon starting (HARNESS_HOME=\(HarnessPaths.applicationSuppor
 // PTY masters (which can't use that option) and is the only protection on Linux.
 ignoreSIGPIPE()
 
-let server = DaemonServer(enableVersionBanner: true)
+let workerSocket = ProcessInfo.processInfo.environment["HARNESS_DAEMON_SOCKET"].map { URL(fileURLWithPath: $0) }
+let server = DaemonServer(enableVersionBanner: true, enablePowerManagement: true, socketURL: workerSocket ?? HarnessPaths.socketURL, mutationLease: mutationLease)
 nonisolated(unsafe) var hasShutDown = false
 let shutdownLock = NSLock()
 
@@ -181,12 +237,16 @@ let shutdown: @Sendable () -> Void = {
     exit(0)
 }
 
+server.onShutdown = shutdown
 installSignalHandlers(server: server, shutdown: shutdown)
 atexit { removePIDFile() }
 
 do {
     try server.start()
-    AgentScanner.shared.start(registry: server.registry)
+    workerSocketOwnership.record(workerSocket)
+    if ProcessInfo.processInfo.environment["HARNESS_DAEMON_WARM"] != "1" {
+        AgentScanner.shared.start(registry: server.registry); server.registry.activatePowerManagement()
+    }
     daemonLog("HarnessDaemon ready (socket=\(HarnessPaths.socketURL.path))")
     server.runLoop()
 } catch {

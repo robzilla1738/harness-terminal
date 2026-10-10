@@ -6,6 +6,7 @@ enum SettingsImportController {
     static func present() {
         guard let imported = TerminalConfigImporter.load() else { DisplayMessage.show("No supported terminal configuration was found."); return }
         do {
+            let expected = try PrivateFile.read(HarnessPaths.settingsURL)
             let patch = try SettingsImport(current: SessionCoordinator.shared.settings, imported: imported)
             let alert = NSAlert()
             alert.messageText = "Import \(imported.sourceName ?? "Terminal") Settings"
@@ -14,9 +15,9 @@ enum SettingsImportController {
             alert.addButton(withTitle: "Cancel")
             let rows = NSStackView()
             rows.orientation = .vertical; rows.alignment = .leading; rows.spacing = 8
-            var choices: [(String, NSButton)] = []
+            var choices: [(String, HarnessToggle)] = []
             for change in patch.changes where change.key != "importedConfigSignature" {
-                let choice = NSButton(checkboxWithTitle: change.title + (change.replacesCustomization ? " · Customized" : ""), target: nil, action: nil)
+                let choice = HarnessToggle(title: change.title + (change.replacesCustomization ? " · Customized" : ""))
                 choice.state = change.replacesCustomization ? .off : .on
                 choices.append((change.key, choice))
                 rows.addArrangedSubview(choice)
@@ -37,7 +38,8 @@ enum SettingsImportController {
             }
             if choices.isEmpty { DisplayMessage.show("The supported settings already match."); return }
             rows.translatesAutoresizingMaskIntoConstraints = false
-            let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 510, height: 320))
+            let reviewHeight = min(320, max(44, rows.fittingSize.height))
+            let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 510, height: reviewHeight))
             let document = FlippedStackHost()
             document.translatesAutoresizingMaskIntoConstraints = false
             document.addSubview(rows)
@@ -52,19 +54,21 @@ enum SettingsImportController {
                 rows.bottomAnchor.constraint(equalTo: document.bottomAnchor),
             ])
             alert.accessoryView = scroll
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            guard HarnessToolPage.runModal(alert) == .alertFirstButtonReturn else { return }
             let selected = Set(choices.filter { $0.1.state == .on }.map(\.0))
             guard !selected.isEmpty else { return }
-            let settings = try patch.applying(to: SessionCoordinator.shared.settings, selected: selected)
             try patch.saveBackup(selected: selected)
-            try SessionCoordinator.shared.applyImportedSettings(settings)
+            _ = try patch.applyFile(at: HarnessPaths.settingsURL, expected: expected, selected: selected)
+            let settings = try HarnessSettings.reload()
+            try SessionCoordinator.shared.applyImportedSettings(settings, persist: false)
             DisplayMessage.show("Imported \(selected.count) settings. Undo Last Settings Import is available in the menu and palette.")
         } catch { DisplayMessage.show("Import failed: \(error.localizedDescription)") }
     }
 
     static func undo() {
         do {
-            let patch = try JSONDecoder().decode(SettingsImport.self, from: Data(contentsOf: SettingsImport.backupURL))
+            guard let data = try PrivateFile.read(SettingsImport.backupURL) else { throw SetupError.invalid("No settings import backup is available.") }
+            let patch = try JSONDecoder().decode(SettingsImport.self, from: data)
             let settings = try patch.undo(in: SessionCoordinator.shared.settings)
             try SessionCoordinator.shared.applyImportedSettings(settings)
             try FileManager.default.removeItem(at: SettingsImport.backupURL)

@@ -18,6 +18,15 @@ final class LaunchAgentInstallerTests: XCTestCase {
         XCTAssertTrue(plist.contains("<key>RunAtLoad</key>"), "RunAtLoad ensures the daemon starts on user login")
     }
 
+    func testPlistPreservesPathsWithXMLCharacters() throws {
+        let path = URL(fileURLWithPath: "/tmp/Harness & <tools>/daemon")
+        let data = Data(LaunchAgentInstaller.plist(daemonPath: path, harnessHome: path, logPath: path).utf8)
+        let values = try XCTUnwrap(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        XCTAssertEqual(values["ProgramArguments"] as? [String], [path.path])
+        XCTAssertEqual((values["EnvironmentVariables"] as? [String: String])?["HARNESS_HOME"], path.path)
+        XCTAssertEqual(values["StandardErrorPath"] as? String, path.path)
+    }
+
     func testIsInstalledReflectsFilesystem() throws {
         // Don't touch the real LaunchAgents path; just confirm the API uses
         // FileManager.default which honors the URL we expose.

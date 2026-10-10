@@ -11,7 +11,9 @@ or technique originated in this project.
 | --- | --- |
 | Terminal parser, screen and history | `Packages/HarnessTerminalEngine` |
 | Core settings, IPC models and commands | `Packages/HarnessCore` |
-| Persistent PTYs and session ownership | `Packages/HarnessDaemonCore` and daemon executable |
+| Persistent PTYs and session ownership | `HarnessSessionHost`, implemented in `Packages/HarnessDaemon` |
+| Replaceable application services | `HarnessDaemon` and its daemon-owned activity store |
+| MCP integration | `Packages/HarnessMCP`, linked by the CLI only |
 | Native terminal surface and input | `Packages/HarnessTerminalKit` |
 | Glyph atlas, damage-driven frames and Metal rendering | `Packages/HarnessTerminalRenderer` |
 | Theme parsing and catalog | `Packages/HarnessTheme` |
@@ -20,7 +22,12 @@ or technique originated in this project.
 
 The current `Package.swift`, resolved package graph and app project do not link
 libghostty. Sparkle is the external Swift package used by the macOS app for updates.
-The CLI links vendored Lua 5.1; image decoding uses vendored stb_image. Fonts, agent
+The CLI’s MCP integration links the official Swift MCP SDK 0.12.1, with pinned
+Swift System, Swift Log, and EventSource support libraries. Swift TOML handles
+format-aware configuration. The verified SDK source, Swift 6.0 manifest, and one
+recorded lifecycle correction are documented in [its provenance](../Vendor/swift-sdk/UPSTREAM.md).
+These dependencies are isolated from the terminal core and daemon. The CLI links
+vendored Lua 5.1; image decoding uses vendored stb_image. Fonts, agent
 marks and community themes also carry their own licenses. The root MIT license
 covers Harness's own work; it does not replace third-party licenses.
 
@@ -85,3 +92,12 @@ Historical changelogs, benchmark evidence, commits, releases and closed discussi
 remain records of what happened. Current architecture and capabilities are maintained
 here and in [Capabilities and limits](CAPABILITIES.md). Cleanup does not rewrite
 published history or remove required notices.
+
+## GitHub language classification
+
+[`.gitattributes`](../.gitattributes) excludes vendored SDK/C sources, upstream
+artwork and license text, and generated theme/Unicode/logo data from authored
+language totals. Harness’s Swift implementation, C interoperability shims, Python
+engineering tools, shell scripts and Makefile retain their actual languages. No
+source is relabeled to inflate Swift’s share. GitHub recalculates the language bar
+after processing the updated default branch.

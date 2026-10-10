@@ -16,19 +16,12 @@ import HarnessCore
 /// being written, so nothing can be corrupted.
 public enum ReplayClient {
     public static func run(path: String, speed: Double, honorTiming: Bool) -> Int32 {
-        let text: String
-        do {
-            let data = try Data(contentsOf: URL(fileURLWithPath: path))
-            text = String(decoding: data, as: UTF8.self)
-        } catch {
-            fputs("harness-cli replay: cannot read \(path): \(error)\n", harnessStderr)
-            return 66 // EX_NOINPUT
-        }
-
-        let (events, skipped) = TerminalRecordingCodec.decode(text)
-        if skipped > 0 {
-            fputs("harness-cli replay: skipped \(skipped) malformed line(s)\n", harnessStderr)
-        }
+        let document: RecordingDocument
+        do { document = try RecordingArchive.read(URL(fileURLWithPath: path)) }
+        catch { fputs("harness-cli replay: cannot read recording: \(error.localizedDescription)\n", harnessStderr); return 66 }
+        if document.interrupted { fputs("harness-cli replay: unfinished or truncated recording; playing completed events only.\n", harnessStderr) }
+        if document.skippedLines > 0 { fputs("harness-cli replay: skipped \(document.skippedLines) malformed legacy line(s).\n", harnessStderr) }
+        let events = document.events
         let steps = TerminalReplay.steps(from: events, honorTiming: honorTiming, speed: speed)
 
         let player = ReplayPlayer()
@@ -53,11 +46,14 @@ private final class ReplayPlayer: @unchecked Sendable {
         var elapsedMs = 0
         for step in steps {
             if interrupted.value { break }
-            elapsedMs += step.delayMs
+            let (elapsed, overflow) = elapsedMs.addingReportingOverflow(max(0, step.delayMs))
+            elapsedMs = overflow ? Int.max : elapsed
             if step.delayMs > 0 {
                 // Absolute target from playback start → no cumulative drift; if
                 // we're already behind, `wait` returns immediately and catches up.
-                let target = start + .milliseconds(elapsedMs)
+                let delta = UInt64(elapsedMs).multipliedReportingOverflow(by: 1_000_000)
+                let targetValue = start.uptimeNanoseconds.addingReportingOverflow(delta.partialValue)
+                let target = delta.overflow || targetValue.overflow ? DispatchTime.distantFuture : DispatchTime(uptimeNanoseconds: targetValue.partialValue)
                 if interruptedSemaphore.wait(timeout: target) == .success { break }
             }
             writeOut(step.data)

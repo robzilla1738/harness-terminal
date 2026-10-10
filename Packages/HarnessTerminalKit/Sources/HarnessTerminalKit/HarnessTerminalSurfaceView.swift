@@ -28,6 +28,9 @@ private final class SurfaceDrawableRequest: @unchecked Sendable {
 }
 
 private struct SurfaceFrameBuildConfiguration: Sendable {
+    // Keep search distinct from selection and legible on both light/dark themes.
+    static let searchBackground = RGBColor(red: 245, green: 191, blue: 66)
+    static let searchForeground = RGBColor(red: 24, green: 24, blue: 24)
     var resolver: CellColorResolver
     var cursorColor: RGBColor
     var cursorTextColor: RGBColor?
@@ -54,6 +57,8 @@ private struct SurfaceFrameBuildConfiguration: Sendable {
             cursorStyle: cursorStyle,
             selectionBackground: selectionBackground,
             selectionForeground: selectionForeground,
+            searchBackground: Self.searchBackground,
+            searchForeground: Self.searchForeground,
             promptGutterEnabled: promptGutterEnabled
         )
     }
@@ -461,7 +466,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         clearSelection()
         columns = cols
         rows = newRows
-        invalidateRenderGeneration()
+        invalidateRenderGeneration(contentChanged: true)
         historyRestore?.resize(cols: cols, rows: newRows, localOnly: false)
         if offMainParserFramePipelineEnabled {
             emulatorState.setPendingResize((cols, newRows), localOnly: false)
@@ -857,7 +862,9 @@ public final class HarnessTerminalSurfaceView: NSView {
             cursorColor: theme.cursor ?? theme.foreground,
             cursorTextColor: theme.cursorText,
             colorRendering: resolvedColorRendering,
-            colorGamut: resolvedGamut
+            colorGamut: resolvedGamut,
+            searchBackground: SurfaceFrameBuildConfiguration.searchBackground,
+            searchForeground: SurfaceFrameBuildConfiguration.searchForeground
         )
         self.frameBuildConfiguration = SurfaceFrameBuildConfiguration(
             resolver: resolver,
@@ -1108,7 +1115,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     private func swapInHistoryRestore(_ restore: HistoryRestore) {
         guard historyRestore === restore else { return } // a newer attach began its own
         historyRestore = nil
-        invalidateRenderGeneration()
+        invalidateRenderGeneration(contentChanged: true)
         let state = emulatorState
         let scanState = triggerScanState
         let swap: @Sendable (TerminalEmulator) -> Int = { previous in
@@ -1474,18 +1481,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             selectionForeground: selFg,
             promptGutterEnabled: promptGutterEnabled
         )
-        self.frameBuilder = FrameBuilder(
-            resolver: resolver,
-            cursorColor: cursor,
-            cursorTextColor: cursorText,
-            canvasOpacity: self.canvasOpacity,
-            colorRendering: resolvedColorRendering,
-            colorGamut: resolvedGamut,
-            cursorStyle: self.cursorStyle,
-            selectionBackground: selBg,
-            selectionForeground: selFg,
-            promptGutterEnabled: promptGutterEnabled
-        )
+        self.frameBuilder = self.frameBuildConfiguration.makeBuilder()
         // Resolved colors/opacity changed — cached rows hold the old palette; force a full rebuild.
         lastPlainFrame = nil
         emulatorState.resetPlainFrame()
@@ -1619,8 +1615,8 @@ public final class HarnessTerminalSurfaceView: NSView {
         offMainParserFramePipelineEnabled ? altScreenMirror : emulatorState.emulator.isAlternateScreenActive
     }
 
-    private func invalidateRenderGeneration() {
-        invalidateFindContent()
+    private func invalidateRenderGeneration(contentChanged: Bool = false) {
+        if contentChanged { invalidateFindContent() }
         renderGeneration &+= 1
         emulatorState.resetPlainFrame()
         lastPresentedResultIsRendererCoherent = false
@@ -2181,6 +2177,14 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// Recompute columns/rows from the view size and resize the emulator + drawable.
     private func updateGridSize() {
         guard let renderer else { return }
+        // A pane being removed or mounted has no drawable geometry yet. Retain its
+        // last useful grid instead of voting a synthetic 1×1 PTY size; that vote
+        // can otherwise survive while Overview is visible or a shell respawns.
+        guard window != nil, bounds.width > 0, bounds.height > 0 else {
+            resizeCommitWork?.cancel()
+            resizeCommitWork = nil
+            return
+        }
         let scale = window?.backingScaleFactor ?? 2.0
         metalLayer.contentsScale = scale
         // Round (not floor) so the drawable exactly covers the layer's pixel area. With
@@ -2340,7 +2344,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         clearSelection()
         columns = cols
         rows = newRows
-        invalidateRenderGeneration()              // bump generation; drop stale preview / plain-frame cache
+        invalidateRenderGeneration(contentChanged: true) // Reflow changes text positions as well as rendering.
         lastSentPTYSize = (cols, newRows)          // keep the live-resize vote coalescer in sync
         if !localOnly {
             onResize?(cols, newRows)              // one PTY SIGWINCH (fire-and-forget). A non-owner does not ioctl.
@@ -4056,6 +4060,7 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     private func invalidateFindContent() {
         findContentRevision &+= 1
+        if findActive, findQuery.isEmpty, !findMatches.isEmpty { findMatches = []; onFindResultsChanged?(0, 0) }
         if findActive, !findQuery.isEmpty { scheduleFind() }
     }
 
@@ -4108,15 +4113,51 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     public func revealSearchResult(query: String, caseSensitive: Bool, line: Int, fingerprint: UInt64) -> Bool {
-        let valid = emulatorSync { emulator in
-            guard line >= 0, line < emulator.bufferLineCount else { return false }
-            let text = emulator.textSnapshot().logicalText(startingAt: line).text
-            return OutputSearch.fingerprint(text.text) == fingerprint
-        }
-        guard valid else { return false }
-        findTargetLine = line
+        guard let target = recordedSearchText(line: line, fingerprint: fingerprint) else { return false }
+        findTargetLine = target.line
         updateFind(query: query, options: TerminalBufferSearchOptions(caseSensitive: caseSensitive))
         return true
+    }
+    /// Host and client can retain different physical row offsets after reflow. Accept
+    /// an exact row first, otherwise only a unique identical logical line nearby.
+    /// Bound the mapping work; ambiguous, evicted or expensive results need a refresh.
+    private func recordedSearchText(line: Int, fingerprint: UInt64) -> (line: Int, text: TerminalMappedText)? {
+        emulatorSync { emulator in
+            let snapshot = emulator.textSnapshot()
+            guard line >= 0 else { return nil }
+            if line < snapshot.lineCount {
+                let text = snapshot.logicalText(startingAt: line).text
+                if OutputSearch.fingerprint(text.text) == fingerprint { return (line, text) }
+            }
+            let deadline = ProcessInfo.processInfo.systemUptime + 0.01
+            let lower = max(0, line - 64), upper = min(snapshot.lineCount, line + 65)
+            guard lower < upper else { return nil }
+            var result: (line: Int, text: TerminalMappedText)?
+            var units = 0
+            for index in lower..<upper where index == 0 || !snapshot.isWrapped(index - 1) {
+                guard ProcessInfo.processInfo.systemUptime < deadline else { return nil }
+                let text = snapshot.logicalText(startingAt: index).text
+                units += text.utf16Count
+                guard units <= 262_144 else { return nil }
+                if OutputSearch.fingerprint(text.text) == fingerprint {
+                    guard result == nil else { return nil }
+                    result = (index, text)
+                }
+            }
+            return result
+        }
+    }
+    /// Apply the isolated worker's recorded span, never execute a regex on a
+    /// parser/render/UI queue. Older responses safely jump without a highlight.
+    public func revealRegexSearchResult(line: Int, fingerprint: UInt64, span: OutputSearchSpan?) -> Bool {
+        guard let target = recordedSearchText(line: line, fingerprint: fingerprint) else { return false }
+        let mapped = target.text
+        endFind(); findActive = true; findQuery = ""; findMatches = []; findCurrentIndex = 0
+        if let span, span.location >= 0, span.length > 0, span.location <= mapped.utf16Count, span.length <= mapped.utf16Count - span.location {
+            let cells = mapped.cells(for: NSRange(location: span.location, length: span.length))
+            if !cells.isEmpty { findMatches = [TerminalBufferMatch(spans: cells)] }
+        }
+        scrollToBufferLine(max(0, target.line - max(0, rows / 3))); scheduleRender(); return true
     }
 
     public func findNext() { advanceFind(by: 1) }

@@ -8,10 +8,11 @@ import HarnessCore
 import HarnessRemoteProtocol
 import HarnessTerminalEngine
 import HarnessTheme
+import HarnessMCP
 
 @main
 struct HarnessCLI {
-    static func main() {
+    static func main() async {
         var args = Array(CommandLine.arguments.dropFirst())
         guard let command = args.first else {
             printUsage()
@@ -20,6 +21,29 @@ struct HarnessCLI {
         args = CLIArguments.normalize(args, command: command)
         do {
             switch command {
+            case "mcp-install":
+                guard let raw = flagValue(args, flag: "--client"), let selected = MCPClientConfiguration(rawValue: raw) else {
+                    throw NSError(domain: "HarnessCLI", code: 2, userInfo: [NSLocalizedDescriptionKey: "mcp-install requires --client claude, codex, or cursor; configuration is printed unless --write is supplied"])
+                }
+                let installation = try MCPInstaller.install(client: selected, executable: CLIInstallLocator.sourceBinary().resolvingSymlinksInPath().path,
+                    allowWrite: args.contains("--allow-write"), write: args.contains("--write"), path: flagValue(args, flag: "--path").map { URL(fileURLWithPath: $0) })
+                print(installation.proposed)
+                if let backup = installation.backup { fputs("Backup: " + backup.path + "\n", harnessStderr) }
+                if args.contains("--write") { fputs((installation.changed ? "Installed: " : "Already configured: ") + installation.path.path + "\n", harnessStderr) }
+                return
+            case "mcp":
+                let endpoint: Endpoint = ProcessInfo.processInfo.environment["HARNESS_SERVER"].map { .unix(path: $0) } ?? .localControlSocket
+                try await HarnessMCPServer.run(endpoint: endpoint, allowWrite: args.contains("--allow-write"), callerSurface: ProcessInfo.processInfo.environment["HARNESS_SURFACE"])
+                return
+            case "hook-policy":
+                try handleHookPolicy(args)
+                return
+            case "agent-hook":
+                captureAgentHook(args)
+                return
+            case "import":
+                try handleImport(args)
+                return
             case "color-check":
                 printColorCheck(args)
                 return
@@ -30,6 +54,9 @@ struct HarnessCLI {
                 exit(try handleRemote(args))
             case "mobile-bridge":
                 try handleMobileBridge(args)
+                return
+            case "mobile-key":
+                try handleDeviceTrust(args)
                 return
             case "mobile-setup":
                 try handleMobileSetup(args)
@@ -43,6 +70,18 @@ struct HarnessCLI {
                 return
             case "daemon":
                 runDaemonForeground() // execs HarnessDaemon; never returns
+            case "daemon-replace":
+                try handleDaemonReplacement(args)
+                return
+            case "daemon-restart":
+                try handleDaemonRestart(args)
+                return
+            case "kill-server":
+                try handleKillServer(args)
+                return
+            case "uninstall":
+                try handleUninstall(args)
+                return
             case "version", "--version", "-v":
                 printVersion(args) // best-effort daemon query; works with the daemon down
                 return
@@ -51,6 +90,21 @@ struct HarnessCLI {
                 return
             case "copy-file":
                 try handleCopyFile(args)
+                return
+            case "schedule":
+                try handleSchedule(args, client: makeClient(args))
+                return
+            case "summary":
+                try handleSummary(args, client: makeClient(args))
+                return
+            case "fanout":
+                try handleFanout(args, client: makeClient(args))
+                return
+            case "worktree":
+                try handleWorktree(args, client: makeClient(args))
+                return
+            case "plugin":
+                try handlePlugin(args)
                 return
             case "config":
                 try handleConfig(args)
@@ -87,6 +141,24 @@ struct HarnessCLI {
                 try printSessions(args, client: client)
             case "list-agents":
                 try printAgents(args, client: client)
+            case "notifications": try handleNotifications(args, client: client)
+            case "awake": try handleAwake(args, client: client)
+            case "resume-agent": try handleAgentResume(args, client: client)
+            case "activity-profile": try handleActivityProfile(args, client: client)
+            case "history-recover":
+                if args.contains("--unlock") {
+                    let protection = HistoryProtection.system(allowInteraction: true)
+                    guard protection.kind != .keyUnavailable else { throw HistoryProtectionError.keyUnavailable(protection.unavailableReason ?? "History key is unavailable.") }
+                }
+                guard case let .daemonStats(stats) = try checkedRequest(client, .daemonStats), stats.supports(DaemonStats.historyRecovery) else {
+                    throw NSError(domain: "HarnessCLI", code: 1, userInfo: [NSLocalizedDescriptionKey: "This daemon cannot recover encrypted history. Replace the application daemon without stopping shells."])
+                }
+                _ = try checkedRequest(client, .retryHistory)
+                print("History recovery completed. Existing shells remain running.")
+            case "usage", "digest":
+                try handleActivityReport(verb: command, args: args, client: client)
+            case "agents":
+                try handleAgents(args, client: client)
             case "doctor":
                 try runDoctor(args, client: client)   // exits with its own status
             case "completions":
@@ -187,8 +259,6 @@ struct HarnessCLI {
                 try handleUnlinkWindow(args, client: client)
             case "control-mode", "-CC":
                 exit(try ControlModeClient.run(client: client))
-            case "kill-server":
-                handleKillServer(args)
             case "start-server":
                 handleStartServer(args, client: client)
             case "show-messages":
@@ -230,6 +300,8 @@ struct HarnessCLI {
                 fputs("harness-cli attach-window: not supported on this platform; use `attach`\n", harnessStderr)
                 exit(64)
                 #endif
+            case "recording":
+                exit(try handleRecording(args))
             case "record":
                 exit(handleRecord(args, client: client))
             case "replay":

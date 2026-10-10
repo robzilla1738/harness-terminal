@@ -24,7 +24,7 @@ public enum TerminalBanner {
         lines.append([Run("Why it's different", sgr: bold)])
         let bullets = [
             "GPU-native renderer — pixel-smooth output and 25 original Harness themes alongside community favorites",
-            "Your shells outlive the window — a background daemon keeps every session running across closes and restarts",
+            "Keep sessions running (default) — the session host preserves shells across app closure and daemon replacement",
             "tmux workflows, no tmux — tabs, splits, prefix keys, copy mode, scriptable from harness-cli",
             "Agent-aware — Claude Code, Codex & friends show live working / needs-attention status on their tab",
             "Remote-ready — run the daemon on a Linux box or server and attach from here over SSH",

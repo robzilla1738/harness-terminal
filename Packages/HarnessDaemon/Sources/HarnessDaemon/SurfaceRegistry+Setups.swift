@@ -3,11 +3,23 @@ import HarnessCore
 
 extension SurfaceRegistry {
     // Called with the registry lock held, just like the other layout operations.
-    func handleLibrary(_ operation: LibraryOperation) -> IPCResponse {
+    func handleLibrary(_ operation: LibraryOperation, capabilities: [String]) -> IPCResponse {
         do {
+            let typed = capabilities.contains(DaemonStats.paneContent)
+            if !typed {
+                let setup: SavedSetup?
+                switch operation {
+                case let .capture(id, _): setup = editor.snapshot.workspaces.flatMap(\.sessions).first(where: { $0.id == id }).map { SavedSetup(name: $0.name, tabs: $0.tabs.map(SetupTab.init)) }
+                case let .save(value, _): setup = editor.snapshot.library.setups.first(where: { $0.id == value.id && $0.containsTypedContent }) ?? value
+                case let .open(id, _): setup = editor.snapshot.library.setups.first(where: { $0.id == id })
+                case let .restoreClosed(id): setup = editor.snapshot.library.recentlyClosed.first(where: { $0.id == id })?.setup
+                default: setup = nil
+                }
+                if setup?.containsTypedContent == true { throw PreviewError.unsupported }
+            }
             switch operation {
             case .list:
-                return .text(String(decoding: try JSONEncoder().encode(editor.snapshot.library), as: UTF8.self))
+                return .text(String(decoding: try JSONEncoder().encode(typed ? editor.snapshot.library : editor.snapshot.library.terminalProjection()), as: UTF8.self))
             case let .capture(sessionID, name):
                 guard let session = editor.snapshot.workspaces.flatMap(\.sessions).first(where: { $0.id == sessionID }) else {
                     return .error("Session not found")
@@ -80,7 +92,7 @@ extension SurfaceRegistry {
 
     private func openRecipe(_ setup: SavedSetup, originSetupID: UUID?, appendTo: SessionID? = nil) throws -> IPCResponse {
         try setup.validate()
-        for pane in setup.tabs.flatMap({ $0.layout.panes }) {
+        for pane in setup.tabs.flatMap({ $0.layout.panes }) where (pane.content ?? .terminal).isTerminal {
             var directory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: pane.directory, isDirectory: &directory), directory.boolValue else {
                 throw SetupError.invalid("Directory not found: \(pane.directory). Edit the setup before opening it.")
@@ -118,7 +130,7 @@ extension SurfaceRegistry {
         if appendTo != nil { for tab in tabs { editor.propagateNewTabToGroup(tab.id) } }
         var failed: [String] = []
         for (tab, definition) in zip(tabs, setup.tabs) {
-            for (leaf, pane) in zip(tab.rootPane.allLeaves(), definition.layout.panes) {
+            for (leaf, pane) in zip(tab.rootPane.allLeaves(), definition.layout.panes) where leaf.paneContent.isTerminal {
                 guard createOrEnsureSurface(surfaceID: leaf.surfaceID.uuidString, cwd: pane.directory, shell: pane.shell,
                                             rows: 24, cols: 80, scrollbackBytes: nil, freshlyCreated: true) != nil else {
                     failed.append(pane.directory)
@@ -132,7 +144,7 @@ extension SurfaceRegistry {
         }
         if originSetupID != nil {
             for (tab, definition) in zip(tabs, setup.tabs) {
-                for (leaf, pane) in zip(tab.rootPane.allLeaves(), definition.layout.panes) {
+                for (leaf, pane) in zip(tab.rootPane.allLeaves(), definition.layout.panes) where leaf.paneContent.isTerminal {
                     if let command = pane.startupCommand, !command.isEmpty {
                         sessions[leaf.surfaceID.uuidString]?.write(command + "\n")
                     }

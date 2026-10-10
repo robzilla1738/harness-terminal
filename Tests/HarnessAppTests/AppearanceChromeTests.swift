@@ -8,17 +8,17 @@ final class AppearanceChromeTests: XCTestCase {
     func testChromeFollowsLightThenRestoresGraphite() {
         let settings = HarnessSettings()
         XCTAssertEqual(settings.appearanceMode, .theme)
-        XCTAssertEqual(settings.backgroundOpacity, 0.63, accuracy: 0.0001)
-        XCTAssertEqual(settings.backgroundBlur, 16)
+        XCTAssertEqual(settings.backgroundOpacity, 0.85, accuracy: 0.0001)
+        XCTAssertEqual(settings.backgroundBlur, 60)
 
         apply(settings: settings, themeName: "Default", mode: .theme, system: .light)
         XCTAssertTrue(HarnessChrome.current.isDark)
-        XCTAssertEqual(HarnessChrome.backgroundOpacity, 0.63, accuracy: 0.0001)
-        XCTAssertEqual(HarnessChrome.backgroundBlur, 16)
-        XCTAssertEqual(HarnessChrome.paintOpacity, 0.63, accuracy: 0.0001)
+        XCTAssertEqual(HarnessChrome.backgroundOpacity, 0.85, accuracy: 0.0001)
+        XCTAssertEqual(HarnessChrome.backgroundBlur, 60)
+        XCTAssertEqual(HarnessChrome.paintOpacity, 0.85, accuracy: 0.0001)
         assertHex(HarnessChrome.current.terminalBackground, ThemeManager.defaultBaselineBackgroundHex)
         assertDarker(HarnessChrome.current.sidebarBackground, than: HarnessChrome.current.terminalBackground)
-        assertHex(HarnessChrome.current.accent, ThemeManager.defaultBaselineCursorHex)
+        assertHex(HarnessChrome.current.accent, "#c7c7c7")
 
         let lightCanvas = ThemeManager.resolvedCanvas(
             themeName: "Default",
@@ -39,10 +39,10 @@ final class AppearanceChromeTests: XCTestCase {
             foregroundHex: "#ffffff"
         )
         XCTAssertFalse(HarnessChrome.current.isDark)
-        XCTAssertEqual(settings.backgroundOpacity, 0.63, accuracy: 0.0001)
-        XCTAssertEqual(settings.backgroundBlur, 16)
-        XCTAssertEqual(HarnessChrome.backgroundOpacity, 0.63, accuracy: 0.0001)
-        XCTAssertEqual(HarnessChrome.backgroundBlur, 16)
+        XCTAssertEqual(settings.backgroundOpacity, 0.85, accuracy: 0.0001)
+        XCTAssertEqual(settings.backgroundBlur, 60)
+        XCTAssertEqual(HarnessChrome.backgroundOpacity, 0.85, accuracy: 0.0001)
+        XCTAssertEqual(HarnessChrome.backgroundBlur, 60)
         XCTAssertGreaterThanOrEqual(HarnessChrome.paintOpacity, CGFloat(ChromeMaterial.lightPaintOpacityFloor))
         assertHex(HarnessChrome.current.terminalBackground, lightCanvas.backgroundHex)
         assertDarker(
@@ -61,12 +61,12 @@ final class AppearanceChromeTests: XCTestCase {
 
         apply(settings: settings, themeName: "Default", mode: .theme, system: .light)
         XCTAssertTrue(HarnessChrome.current.isDark)
-        XCTAssertEqual(HarnessChrome.backgroundOpacity, 0.63, accuracy: 0.0001)
-        XCTAssertEqual(HarnessChrome.paintOpacity, 0.63, accuracy: 0.0001)
-        XCTAssertEqual(HarnessChrome.backgroundBlur, 16)
+        XCTAssertEqual(HarnessChrome.backgroundOpacity, 0.85, accuracy: 0.0001)
+        XCTAssertEqual(HarnessChrome.paintOpacity, 0.85, accuracy: 0.0001)
+        XCTAssertEqual(HarnessChrome.backgroundBlur, 60)
         assertHex(HarnessChrome.current.terminalBackground, ThemeManager.defaultBaselineBackgroundHex)
         assertDarker(HarnessChrome.current.sidebarBackground, than: HarnessChrome.current.terminalBackground)
-        assertHex(HarnessChrome.current.accent, ThemeManager.defaultBaselineCursorHex)
+        assertHex(HarnessChrome.current.accent, "#c7c7c7")
     }
 
     private func apply(

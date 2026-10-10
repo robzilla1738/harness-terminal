@@ -26,6 +26,31 @@ public final class DaemonClient: @unchecked Sendable {
         }
     }
 
+    func requestFromLocalOwner(_ request: IPCRequest, pid: Int32, generation: String, timeout: TimeInterval) throws -> IPCResponse {
+        let deadline = SocketDeadline(timeout: timeout)
+        return try queue.sync {
+            try performRequest(request, deadline: deadline, expectedOwner: (pid, generation))
+        }
+    }
+
+    /// Explicit response negotiation for layout-bearing calls. Probe each time because
+    /// the active daemon can change while a client remains alive.
+    public func requestForCurrentClient(_ request: IPCRequest, timeout: TimeInterval = 2) throws -> IPCResponse {
+        switch request {
+        case .getSnapshot, .library:
+            guard case let .daemonStats(stats) = try self.request(.daemonStats, timeout: min(timeout, 2)) else { throw DaemonClientError.unexpectedResponse }
+            if stats.supports(DaemonStats.paneContent) {
+                switch request {
+                case .getSnapshot: return try self.request(.getSnapshotForClient(capabilities: [DaemonStats.paneContent, DaemonStats.agentIdentities]), timeout: timeout)
+                case let .library(operation): return try self.request(.libraryForClient(operation, capabilities: [DaemonStats.paneContent, DaemonStats.agentIdentities]), timeout: timeout)
+                default: break
+                }
+            }
+        default: break
+        }
+        return try self.request(request, timeout: timeout)
+    }
+
     @discardableResult
     public func subscribeSurfaceOutput(
         surfaceID: String,
@@ -182,6 +207,7 @@ public final class DaemonClient: @unchecked Sendable {
         _ request: AttachRequest,
         onAttached: @escaping @Sendable (AttachReply) -> Void,
         onData: @escaping @Sendable (Data, UInt64) -> Void,
+        onResize: (@Sendable (ReplaySize) -> Void)? = nil,
         onOwnership: (@Sendable (SizeOwnership) -> Void)? = nil,
         onEnd: (@Sendable () -> Void)? = nil,
         onError: (@Sendable (String) -> Void)? = nil
@@ -197,6 +223,7 @@ public final class DaemonClient: @unchecked Sendable {
                 subscription?.setInputErrorSupport(reply.inputErrors == true)
                 onAttached(reply)
             case let .data(data, sequence): onData(data, sequence)
+            case let .terminalResize(size): onResize?(size)
             case let .sizeOwnership(ownership): onOwnership?(ownership)
             case let .error(message): onError?(message)
             default: break
@@ -226,13 +253,14 @@ public final class DaemonClient: @unchecked Sendable {
     @discardableResult
     public func subscribeSnapshot(
         label: String? = nil,
+        capabilities: [String] = [],
         onRevision: @escaping @Sendable (Int) -> Void,
         onDirective: (@Sendable (ClientDirective) -> Void)? = nil,
         onEnd: (@Sendable () -> Void)? = nil
     ) throws -> DaemonSubscription {
         let deadline = SocketDeadline(timeout: 2)
         let fd = try EndpointConnector.connect(endpoint, deadline: deadline)
-        let payload = try IPCCodec.encode(IPCEnvelope(request: .subscribeSnapshot(label: label, directives: onDirective != nil)))
+        let payload = try IPCCodec.encode(IPCEnvelope(request: .subscribeSnapshot(label: label, directives: onDirective != nil, capabilities: capabilities)))
         do { try deadline.write(payload, to: fd) } catch { close(fd); throw error } // EINTR-safe, looped
         let subscription = DaemonSubscription(fd: fd)
         subscription.start(
@@ -300,9 +328,12 @@ public final class DaemonClient: @unchecked Sendable {
         }
     }
 
-    private func performRequest(_ ipcRequest: IPCRequest, deadline: SocketDeadline) throws -> IPCResponse {
+    private func performRequest(_ ipcRequest: IPCRequest, deadline: SocketDeadline, expectedOwner: (pid: Int32, generation: String)? = nil) throws -> IPCResponse {
         let fd = try EndpointConnector.connect(endpoint, deadline: deadline)
         defer { close(fd) }
+        if let expectedOwner, !DaemonOwnership.localPeerMatches(fd: fd, pid: expectedOwner.pid, generation: expectedOwner.generation) {
+            throw DaemonRestart.Failure.refused("The local socket owner changed or could not be verified. Existing shells have been preserved.")
+        }
         let payload = try IPCCodec.encode(IPCEnvelope(request: ipcRequest))
         try deadline.write(payload, to: fd)
         var buffer = Data()

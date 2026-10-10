@@ -2,6 +2,27 @@ import XCTest
 @testable import HarnessTerminalEngine
 
 final class ProgramStatusTests: XCTestCase {
+    func testPublishedInteroperabilityVectorsAndRepresentativeTUIReplays() throws {
+        struct Fixture: Decodable { struct Vector: Decodable { var name: String; var wire_base64: String; var expected_states: [String: String] }; var vectors: [Vector] }
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Fixtures/interop")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: directory.appendingPathComponent("osc-7501-vectors.json")))
+        func check(_ data: Data, expected: [String: String], name: String) {
+            let complete = scanBook(data)
+            var scanner = PtyStreamScanner(), split = ProgramStatusBook()
+            let terminal = TerminalEmulator(cols: 80, rows: 24); terminal.isReplaying = true
+            for byte in data { let chunk = Data([byte]); for event in scanner.scan(chunk) { _ = split.apply(scan: event) }; terminal.feed(chunk) }
+            XCTAssertEqual(complete, split, name); XCTAssertEqual(complete, terminal.programStatus, name)
+            XCTAssertEqual(complete.records.mapValues { $0.state.rawValue }, expected, name)
+        }
+        for vector in fixture.vectors { check(try XCTUnwrap(Data(base64Encoded: vector.wire_base64)), expected: vector.expected_states, name: vector.name) }
+        for (name, provider) in [("claude", "claude-code"), ("codex", "codex"), ("cursor", "cursor")] {
+            let lines = try String(contentsOf: directory.appendingPathComponent(name + "-tui.cast"), encoding: .utf8).split(separator: "\n")
+            var bytes = Data()
+            for line in lines.dropFirst() { let event = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [Any]); XCTAssertEqual(event[1] as? String, "o"); bytes.append(contentsOf: try XCTUnwrap(event[2] as? String).utf8) }
+            check(bytes, expected: ["": "done"], name: name)
+            XCTAssertEqual(scanBook(bytes).records[""]?.app, provider)
+        }
+    }
     private func osc(_ body: String, bel: Bool = false) -> Data {
         var data = Data([0x1B, 0x5D])
         data.append(contentsOf: body.utf8)

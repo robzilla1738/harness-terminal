@@ -18,6 +18,16 @@ final class DaemonClientTests: XCTestCase {
         _ = coreTestSIGPIPEIgnored
     }
 
+    func testAdministrativePeerIdentityRejectsDifferentPIDAndBirth() throws {
+        var fds: [Int32] = [-1, -1]
+        XCTAssertEqual(makeUnixSocketPair(&fds), 0)
+        defer { for fd in fds { sysClose(fd) } }
+        let generation = try XCTUnwrap(ProcessScan.generation(getpid()))
+        XCTAssertTrue(DaemonOwnership.localPeerMatches(fd: fds[0], pid: getpid(), generation: generation))
+        XCTAssertFalse(DaemonOwnership.localPeerMatches(fd: fds[0], pid: getpid() + 1, generation: generation))
+        XCTAssertFalse(DaemonOwnership.localPeerMatches(fd: fds[0], pid: getpid(), generation: generation + ":wrong"))
+    }
+
     func testRequestTimesOutWhenSocketAcceptsButDoesNotReply() throws {
         let previousHome = getenv("HARNESS_HOME").map { String(cString: $0) }
         // Keep the root short: the macOS temp dir + a full UUID pushes harness.sock past the

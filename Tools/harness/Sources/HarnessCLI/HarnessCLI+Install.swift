@@ -40,7 +40,7 @@ extension HarnessCLI {
 
     static func handleInstallHooks(_ args: [String]) throws {
         let agent = args.dropFirst().first ?? flagValue(args, flag: "--agent") ?? ""
-        AgentHookInstallerCLI.run(agentArg: agent)
+        AgentHookInstallerCLI.run(agentArg: agent, dryRun: args.contains("--dry-run"))
     }
 
     /// `install-shell-integration [bash|zsh|fish|all]` — drop the OSC 133 script under the Harness
@@ -94,16 +94,24 @@ extension HarnessCLI {
         try copyExecutable(source: source, destination: dest)
         print(dest.path)
         print("export PATH=\"\(dest.deletingLastPathComponent().path):$PATH\"")
-        // Install the daemon as a managed service so it survives reboot/logout: launchd on macOS,
-        // systemd --user on Linux. The same flow works on a headless box.
+        // Start the service at login/boot through launchd or systemd --user.
+        // Restorable history/layout do not mean live processes survive logout/reboot.
         let installer = ServiceInstallers.current
         if let daemon = locateDaemonBinary() {
             do {
                 let installedDaemon = HarnessPaths.applicationSupport.appendingPathComponent("bin/HarnessDaemon")
+                let owner = HarnessToolLocator.companion("HarnessSessionHost", to: daemon)
+                guard FileManager.default.isExecutableFile(atPath: owner.path) else { throw DaemonSessionError.daemonError("Session host binary is missing. The CLI was installed, but daemon/service installation could not proceed.") }
+                try copyExecutable(source: owner, destination: BinaryRefresher.installedSessionHostPath)
                 try copyExecutable(source: daemon, destination: installedDaemon)
                 print("daemon: \(installedDaemon.path)")
-                let report = try installer.install(daemonPath: installedDaemon, harnessHome: HarnessPaths.applicationSupport)
-                print("service (\(installer.backendName)): \(report.unitPath.path)")
+                if !HarnessPaths.hasHomeOverride {
+                    let report = try installer.install(daemonPath: installedDaemon, harnessHome: HarnessPaths.applicationSupport)
+                    print("service (\(installer.backendName)): \(report.unitPath.path)")
+                    if FileManager.default.fileExists(atPath: report.unitPath.appendingPathExtension("pending").path) {
+                        print("service update staged; existing shells preserved")
+                    }
+                }
             } catch {
                 fputs("warning: \(installer.backendName) install failed: \(error)\n", harnessStderr)
             }
@@ -114,10 +122,14 @@ extension HarnessCLI {
         // into its auto-load dir; zsh/bash get a guarded, backed-up, idempotent `source` block
         // wired into the rc (the same mechanism as install-shell-integration). Any shell can also
         // regenerate the script on demand with `harness-cli completions <shell>`.
-        do {
-            for line in try ShellCompletionInstaller.installForLoginShell() { print(line) }
-        } catch {
-            fputs("warning: shell completion install failed: \(error)\n", harnessStderr)
+        if HarnessPaths.hasHomeOverride {
+            print("Explicit Harness home: login service and shell profiles were not changed.")
+        } else {
+            do {
+                for line in try ShellCompletionInstaller.installForLoginShell() { print(line) }
+            } catch {
+                fputs("warning: shell completion install failed: \(error)\n", harnessStderr)
+            }
         }
         print("Tip: run 'harness-cli install-shell-integration' to enable OSC 133 prompt marks, "
             + "the success/failure gutter, and prompt jumping.")
@@ -136,7 +148,7 @@ extension HarnessCLI {
             return URL(fileURLWithPath: override)
         }
         let cli = CLIInstallLocator.sourceBinary()
-        let candidate = cli.deletingLastPathComponent().appendingPathComponent("HarnessDaemon")
+        let candidate = HarnessToolLocator.companion("HarnessDaemon", to: cli)
         if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
         // The copy `install` placed under the Harness home.
         let installed = HarnessPaths.applicationSupport.appendingPathComponent("bin/HarnessDaemon")
@@ -188,6 +200,9 @@ extension HarnessCLI {
             var daemonVersion: String?
             var daemonBuild: Int?
             var daemonRunning: Bool
+            var daemonCompatibility: DaemonCompatibility? = nil
+            var daemonProtocolLevel: Int? = nil
+            var updatePending: Bool? = nil
         }
         var report = VersionReport(
             cliVersion: HarnessVersion.short,
@@ -202,6 +217,9 @@ extension HarnessCLI {
             report.daemonRunning = true
             report.daemonVersion = stats.version
             report.daemonBuild = stats.build
+            report.daemonCompatibility = stats.compatibility
+            report.daemonProtocolLevel = stats.protocolLevel
+            report.updatePending = stats.updateAvailable
         }
         if args.contains("--json") {
             if let encoded = try? JSONOutputFormatter.encode(report, pretty: args.contains("--pretty")) {
@@ -211,11 +229,14 @@ extension HarnessCLI {
         }
         print("harness-cli \(report.cliVersion) (\(report.cliBuild))")
         if !report.daemonRunning {
-            print("daemon: not running")
+            print("daemon: unreachable; existing programs may still be running")
         } else if let build = report.daemonBuild {
             var line = "daemon: \(report.daemonVersion ?? "?") (\(build))"
-            if build != HarnessVersion.build { line += "  [mismatch — restart Harness.app, or run: harness-cli install]" }
+            if report.updatePending == true { line += "  [update pending — shells preserved; daemon-restart --if-empty]" }
             print(line)
+            if report.daemonCompatibility != .compatible {
+                print("daemon protocol: \(report.daemonCompatibility?.rawValue ?? "unknown"); shells preserved")
+            }
         } else {
             print("daemon: running, pre-handshake build (no version reported)")
         }

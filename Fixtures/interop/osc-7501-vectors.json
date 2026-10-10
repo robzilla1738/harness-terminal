@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "protocol": "OSC 7501 revision 0.2",
+  "encoding": "wire_base64 contains exact UTF-8 terminal bytes",
+  "vectors": [
+    {
+      "name": "working-progress",
+      "wire_base64": "G103NTAxO3N0YXRlPXdvcmtpbmc6YXBwPWNvZGV4OnByb2dyZXNzPTQwG1w=",
+      "expected_states": {
+        "": "working"
+      }
+    },
+    {
+      "name": "permission",
+      "wire_base64": "G103NTAxO3N0YXRlPWJsb2NrZWQ6a2luZD1wZXJtaXNzaW9uOmFwcD1jbGF1ZGUtY29kZTptc2c9VW1WMmFXVjNJR052YlcxaGJtUT0bXA==",
+      "expected_states": {
+        "": "blocked"
+      }
+    },
+    {
+      "name": "parent-and-clear",
+      "wire_base64": "G103NTAxO3N0YXRlPWlkbGU6YXBwPWN1cnNvchtcG103NTAxO3N0YXRlPXdvcmtpbmc6aWQ9dGFzaxtcG103NTAxO3N0YXRlPWJsb2NrZWQ6aWQ9dGFzay90b29sOmtpbmQ9cXVlc3Rpb24bXBtdNzUwMTtzdGF0ZT1jbGVhcjppZD10YXNrG1w=",
+      "expected_states": {
+        "": "idle"
+      }
+    },
+    {
+      "name": "duplicate-key-last-wins",
+      "wire_base64": "G103NTAxO3N0YXRlPXdvcmtpbmc6c3RhdGU9ZG9uZTphcHA9Y29kZXgbXA==",
+      "expected_states": {
+        "": "done"
+      }
+    },
+    {
+      "name": "invalid-title-preserves",
+      "wire_base64": "G103NTAxO3N0YXRlPWlkbGU6YXBwPWN1cnNvchtcG103NTAxO3N0YXRlPXdvcmtpbmc6dGl0bGU9RzNWdWMyRm1aUT09G1w=",
+      "expected_states": {
+        "": "idle"
+      }
+    },
+    {
+      "name": "unknown-state-preserves",
+      "wire_base64": "G103NTAxO3N0YXRlPWlkbGUbXBtdNzUwMTtzdGF0ZT11bnJlY29nbml6ZWQbXA==",
+      "expected_states": {
+        "": "idle"
+      }
+    },
+    {
+      "name": "prompt-removes-ephemeral",
+      "wire_base64": "G103NTAxO3N0YXRlPXdvcmtpbmcbXBtdNzUwMTtzdGF0ZT1kb25lOmlkPXRhc2sbXBtdMTMzO0EbXA==",
+      "expected_states": {
+        "task": "done"
+      }
+    },
+    {
+      "name": "query-does-not-store",
+      "wire_base64": "G103NTAxOz8bXA==",
+      "expected_states": {}
+    }
+  ]
+}

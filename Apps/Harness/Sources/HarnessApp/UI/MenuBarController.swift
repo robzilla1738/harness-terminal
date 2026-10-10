@@ -66,6 +66,22 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(notificationSettings)
 
         menu.addItem(.separator())
+        if let upgrade = DaemonLauncher.shared.pendingUpgrade {
+            let pending = NSMenuItem(title: upgrade.compatibility == .compatible ? "Session-service update pending" : "Session service needs attention", action: nil, keyEquivalent: "")
+            pending.toolTip = upgrade.message
+            pending.isEnabled = false
+            menu.addItem(pending)
+        }
+        let recover = NSMenuItem(title: "Unlock and Recover History…", action: #selector(recoverHistory), keyEquivalent: "")
+        recover.target = self; menu.addItem(recover)
+        let replace = NSMenuItem(title: "Replace Application Daemon", action: #selector(replaceApplicationDaemon), keyEquivalent: "")
+        replace.target = self
+        menu.addItem(replace)
+        let restart = NSMenuItem(title: "Restart Session Host…", action: #selector(restartSessionService), keyEquivalent: "")
+        restart.target = self
+        menu.addItem(restart)
+
+        menu.addItem(.separator())
         addHeader("Sessions", to: menu)
         let sessions = snapshot.workspaces.flatMap { ws in ws.sessions.map { (ws, $0) } }
         if sessions.isEmpty {
@@ -86,6 +102,54 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     // MARK: - Item builders
 
+    @objc private func recoverHistory() {
+        let endpoint = Endpoint.localControlSocket
+        Task { @MainActor in
+            let failure = await Task.detached(priority: .userInitiated) { () -> String? in
+                let protection = HistoryProtection.system(allowInteraction: true)
+                guard protection.kind != .keyUnavailable else { return protection.unavailableReason ?? "History key is unavailable." }
+                do {
+                    let response = try DaemonClient(endpoint: endpoint).request(.retryHistory, timeout: 15)
+                    if case let .error(message) = response { return message }
+                    guard case .ok = response else { return "The session service did not confirm history recovery." }; return nil
+                } catch { return error.localizedDescription }
+            }.value
+            let alert = NSAlert()
+            alert.messageText = failure == nil ? "History capture recovered" : "History recovery could not complete"
+            alert.informativeText = failure ?? "Encrypted capture has resumed. Existing shells and programs remain running."
+            alert.runModal()
+        }
+    }
+    @objc private func replaceApplicationDaemon() {
+        DaemonLauncher.shared.replaceDaemon { failure in
+            if let failure {
+                let alert = NSAlert(); alert.messageText = "Daemon replacement could not complete"
+                alert.informativeText = failure; alert.runModal()
+            } else { SessionCoordinator.shared.refreshSnapshot() }
+        }
+    }
+
+    @objc private func restartSessionService() {
+        let snapshot = SessionCoordinator.shared.snapshot
+        let leaves = snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs).flatMap { $0.rootPane.allSurfaceIDs() }
+        let alert = NSAlert()
+        alert.messageText = "Restart the session service?"
+        alert.informativeText = "This stops every shell and program owned by the service, including background jobs. The current layout contains \(leaves.count) panes. Saved layouts will reopen with fresh shells."
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Restart Only If Empty")
+        alert.addButton(withTitle: "Stop Shells and Restart")
+        let result = alert.runModal()
+        guard result != .alertFirstButtonReturn else { return }
+        DaemonLauncher.shared.restart(force: result == .alertThirdButtonReturn) { failure in
+            if let failure {
+                let error = NSAlert()
+                error.messageText = "Session service could not restart"
+                error.informativeText = failure
+                error.runModal()
+            } else { SessionCoordinator.shared.refreshSnapshot() }
+        }
+    }
+
     private func addHeader(_ text: String, to menu: NSMenu) {
         let item = NSMenuItem(title: text, action: nil, keyEquivalent: "")
         item.isEnabled = false
@@ -101,8 +165,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let item = NSMenuItem(title: row.kind.displayName, action: #selector(activate(_:)), keyEquivalent: "")
         item.target = self
         item.representedObject = MenuRef(row.workspaceID, row.sessionID)
-        let tint = NSColor.fromHex(SessionCoordinator.shared.settings.agentColorHex(for: row.kind)) ?? .secondaryLabelColor
-        item.image = AgentIconRenderer.coloredOrMonogramImage(for: row.kind, size: 15, color: tint)
+        item.image = AgentIconRenderer.templateOrMonogramImage(for: row.kind, size: 15)
 
         let title = NSMutableAttributedString(string: row.kind.displayName, attributes: [
             .font: NSFont.systemFont(ofSize: 13, weight: .medium),
@@ -141,8 +204,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         if let tab = session.activeTab ?? session.tabs.first,
            let kind = tab.agent?.kind ?? AgentTitleInference.kind(from: tab.title) {
-            let tint = NSColor.fromHex(SessionCoordinator.shared.settings.agentColorHex(for: kind)) ?? .secondaryLabelColor
-            item.image = AgentIconRenderer.coloredOrMonogramImage(for: kind, size: 13, color: tint)
+            item.image = AgentIconRenderer.templateOrMonogramImage(for: kind, size: 13)
         }
         return item
     }

@@ -2,14 +2,17 @@
 set -euo pipefail
 CONFIG="${1:-release}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD_DIR="$ROOT/.build/$CONFIG"
-APP="${HARNESS_APP_OUTPUT:-$ROOT/Harness.app}"
-
-rm -rf "$APP"
+BUILD_DIR="$(cd "$ROOT" && swift build -c "$CONFIG" --show-bin-path)"
+FINAL_APP="${HARNESS_APP_OUTPUT:-$ROOT/Harness.app}"
+mkdir -p "$(dirname "$FINAL_APP")"
+STAGE_ROOT="$(mktemp -d "$(dirname "$FINAL_APP")/.HarnessPackage.XXXXXX")"
+trap 'rm -rf "$STAGE_ROOT"' EXIT
+APP="$STAGE_ROOT/Harness.app"
 mkdir -p "$APP/Contents/MacOS"
 mkdir -p "$APP/Contents/Resources"
 
 cp "$BUILD_DIR/Harness" "$APP/Contents/MacOS/Harness"
+cp "$BUILD_DIR/HarnessSessionHost" "$APP/Contents/MacOS/HarnessSessionHost"
 cp "$BUILD_DIR/HarnessDaemon" "$APP/Contents/MacOS/HarnessDaemon"
 cp "$BUILD_DIR/harness-cli" "$APP/Contents/MacOS/harness-cli"
 cp "$ROOT/Apps/Harness/Sources/HarnessApp/Resources/Info.plist" "$APP/Contents/Info.plist"
@@ -17,7 +20,7 @@ cp "$ROOT/Apps/Harness/Sources/HarnessApp/Resources/Info.plist" "$APP/Contents/I
 # Guard: HarnessVersion.swift is the daemon/CLI's view of the version (the app reads
 # Bundle.main, but the launchd daemon can't). It is bumped by hand alongside Info.plist;
 # v1.3.0/v1.3.1 missed it, shipping daemons that reported 1.2.0 — and the daemon↔app build
-# handshake depends on it. Fail the package step if the two disagree.
+# displayed component versions depend on it. Fail the package step if the two disagree.
 PLIST_SHORT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 PLIST_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")"
 VERSION_SWIFT="$ROOT/Packages/HarnessCore/Sources/HarnessCore/HarnessVersion.swift"
@@ -47,7 +50,7 @@ for bundle in "$BUILD_DIR"/*.bundle; do
   ditto "$bundle" "$APP/Contents/Resources/$(basename "$bundle")"
 done
 
-# Embed Sparkle.framework (the only external dependency, GUI-only). SwiftPM links it via
+# Embed Sparkle.framework (GUI-only). SwiftPM links it via
 # `@rpath`, so the app binary needs an rpath into Contents/Frameworks. `ditto` preserves the
 # framework's version symlinks + nested code signatures (a plain `cp` would flatten them).
 # SwiftPM normally drops it at .build/$CONFIG/Sparkle.framework; fall back to the artifacts
@@ -94,9 +97,25 @@ if [[ -d "$FONTS" ]]; then
 fi
 
 chmod +x "$APP/Contents/MacOS/"*
+python3 "$ROOT/Scripts/package-macos-tools.py" "$APP"
 
 # Logo provenance and redistribution licenses accompany the compiled marks.
 cp "$ROOT/Apps/Harness/Sources/HarnessApp/Resources/AgentLogoNotices.txt" "$APP/Contents/Resources/AgentLogoNotices.txt"
 cp "$ROOT/docs/THIRD-PARTY-NOTICES.md" "$APP/Contents/Resources/THIRD-PARTY-NOTICES.md"
 
-echo "Created $APP"
+# Include the CLI's statically linked dependencies and their retained notices.
+LICENSES="$APP/Contents/Resources/Licenses"
+mkdir -p "$LICENSES"
+cp "$ROOT/LICENSE" "$LICENSES/Harness-LICENSE"
+cp "$ROOT/Vendor/swift-sdk/LICENSE" "$LICENSES/MCP-SDK-LICENSE"
+cp "$ROOT/Packages/CLua51/COPYRIGHT" "$LICENSES/Lua-COPYRIGHT"
+cp "$ROOT/Packages/CHarnessImage/LICENSE" "$LICENSES/CHarnessImage-LICENSE"
+for checkout in "$ROOT/.build/checkouts/"*; do
+  [[ -d "$checkout" ]] || continue
+  for notice in "$checkout/LICENSE" "$checkout/LICENSE.txt" "$checkout/COPYING"; do
+    [[ -f "$notice" ]] || continue
+    cp "$notice" "$LICENSES/$(basename "$checkout")-$(basename "$notice")"
+  done
+done
+python3 "$ROOT/Scripts/atomic-bundle.py" "$APP" "$FINAL_APP"
+echo "Created $FINAL_APP"

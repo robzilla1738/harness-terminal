@@ -50,6 +50,37 @@ final class DaemonRoundTripTests: XCTestCase {
         if !ready { XCTFail("daemon did not become ready") }
     }
 
+    func testLiveRecordingUsesOrderedPTYGeometryAndStoppingPreservesShell() throws {
+        #if os(macOS)
+        let protection = try HistoryProtection(keyMaterial: Data(repeating: 53, count: 32))
+        #else
+        let protection = HistoryProtection.system()
+        #endif
+        let client = DaemonClient()
+        guard case let .snapshot(snapshot) = try client.request(.getSnapshot), let surface = snapshot.activeWorkspace?.activeTab?.rootPane.allLeaves().first?.surfaceID else { return XCTFail("No fixture shell") }
+        let path = try XCTUnwrap(root).appendingPathComponent("capture.hrec")
+        let recorder = LiveTerminalRecorder(client: client, surfaceID: surface.uuidString, url: path, protection: protection, onUpdate: { _ in })
+        defer { recorder.stop() }
+        recorder.start()
+        XCTAssertTrue(waitUntil(timeout: 5) { recorder.status.phase == .recording || recorder.status.phase == .failed })
+        XCTAssertEqual(recorder.status.phase, .recording, recorder.status.failure ?? "")
+        guard case .ok = try client.request(.resizeSurface(surfaceID: surface.uuidString, rows: 40, cols: 100)) else { return XCTFail("Fixture resize failed") }
+        let marker = "RECORDING_ACTUAL_PTY_OUTPUT"
+        _ = try client.request(.send(surfaceID: surface.uuidString, text: "printf '\(marker)\\n'\n"))
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            guard let document = try? RecordingArchive.read(path, protection: protection) else { return false }
+            return document.events.contains { if case let .output(_, data) = $0 { return String(decoding: data, as: UTF8.self).contains(marker) }; return false }
+        })
+        recorder.stop()
+        XCTAssertEqual(recorder.status.phase, .finished)
+        let document = try RecordingArchive.read(path, protection: protection)
+        XCTAssertFalse(document.interrupted)
+        let resize = try XCTUnwrap(document.events.firstIndex { if case let .resize(_, rows, cols) = $0 { return rows == 40 && cols == 100 }; return false })
+        let output = try XCTUnwrap(document.events.firstIndex { if case let .output(_, data) = $0 { return String(decoding: data, as: UTF8.self).contains(marker) }; return false })
+        XCTAssertLessThan(resize, output)
+        guard case .pong = try client.request(.ping), case .ok = try client.request(.send(surfaceID: surface.uuidString, text: "printf 'SHELL_STILL_RUNNING\\n'\n")) else { return XCTFail("Stopping a recorder must preserve the shell") }
+    }
+
     func testControlSocketIsOwnerOnly() throws {
         // The control socket drives PTY spawning and hook shell commands — it must be
         // 0o600 so no other local user can connect, even before the peer-cred check.
@@ -298,7 +329,7 @@ final class DaemonRoundTripTests: XCTestCase {
         defer { subscription.cancel() }
         XCTAssertTrue(waitUntil(timeout: 15) { start.value != nil })
         _ = try client.request(.sendData(surfaceID: sid, data: Data("go\n".utf8)))
-        XCTAssertTrue(waitUntil(timeout: 15) { output.contains("FLOOD_DONE") })
+        XCTAssertTrue(waitUntil(timeout: 15) { output.contains("\r\nFLOOD_DONE\r\n") })
 
         let reply = try XCTUnwrap(start.value)
         XCTAssertTrue(reply.resync)

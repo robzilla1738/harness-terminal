@@ -99,7 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private static let modePersistenceLastAppliedKey = "HarnessModePersistenceLastAppliedMode"
+    private static var modePersistenceLastAppliedKey: String { UIStateDefaults.key("HarnessModePersistenceLastAppliedMode") }
 
     /// Record that `mode`'s keep-on-quit default has been applied to the daemon, so the next
     /// launch's reconcile treats the mode as settled. Called after the launch-time apply below and
@@ -125,7 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Settings override (e.g. a Plain user who pinned keep-on-quit on would lose sessions on
         // the next quit).
         if defaults.string(forKey: modePersistenceLastAppliedKey) == nil,
-           defaults.bool(forKey: "HarnessModePersistenceReconciledV1") {
+           defaults.bool(forKey: UIStateDefaults.key("HarnessModePersistenceReconciledV1")) {
             recordModePersistenceApplied(mode)
             return
         }
@@ -135,7 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // daemon is still spawning would otherwise burn the key without ever applying the mode's
         // keep-on-quit default — leaving a fresh Plain install wrongly persistent forever.
         SessionCoordinator.shared.requestDaemonAsync(.setKeepSessionsOnQuit(keep)) { response in
-            if response != nil { recordModePersistenceApplied(mode) }
+            if case .ok? = response { recordModePersistenceApplied(mode) }
         }
     }
 
@@ -224,7 +224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Window restore
 
-    private static let openWindowsKey = "HarnessOpenWindows"
+    private static var openWindowsKey: String { UIStateDefaults.key("HarnessOpenWindows") }
     private var terminating = false
     /// Saving waits for the restore, so the launch window can't overwrite the list it reads.
     private var windowsRestored = false

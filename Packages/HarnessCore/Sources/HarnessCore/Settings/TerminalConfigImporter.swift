@@ -262,7 +262,7 @@ public enum TerminalConfigImporter {
         "macos-option-as-alt",
     ]
 
-    static func parse(_ text: String) -> ImportedTerminalConfig {
+    public static func parse(_ text: String) -> ImportedTerminalConfig {
         var values: [String: String] = [:]
         var seen: [String] = []
         var shortcuts: [String: String] = [:]
@@ -288,7 +288,17 @@ public enum TerminalConfigImporter {
                 if parts.count == 2, let action = actions[parts[1]],
                    let spec = KeySpec.parse(parts[0].replacingOccurrences(of: "+", with: "-")),
                    spec.modifiers.contains(.command), spec.key.count == 1 {
-                    shortcuts[action] = spec.description
+                    let chord = spec.description
+                    // Ghostty reassigns the same chord; preserve that result while
+                    // reporting displaced mappings instead of binding two actions.
+                    for (other, existing) in shortcuts where existing == chord && other != action {
+                        skippedBindings.append("keybind conflict: " + existing + " reassigned from " + other + " to " + action)
+                        shortcuts[other] = nil
+                    }
+                    if let old = shortcuts[action], old != chord {
+                        skippedBindings.append("keybind: additional chord " + old + " for " + action + " cannot fit Harness's one-chord action model")
+                    }
+                    shortcuts[action] = chord
                 } else { skippedBindings.append("keybind: " + value) }
                 continue
             }

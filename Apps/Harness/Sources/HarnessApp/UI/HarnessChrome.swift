@@ -41,20 +41,21 @@ struct HarnessChromePalette {
 
     static let fallback = HarnessChromePalette.from(
         backgroundHex: ThemeManager.defaultBaselineBackgroundHex,
-        foregroundHex: ThemeManager.defaultBaselineForegroundHex,
-        cursorHex: ThemeManager.defaultBaselineCursorHex
+        foregroundHex: ThemeManager.defaultBaselineForegroundHex
     )
 
     /// Build a palette directly from explicit hex strings (used when the user has
     /// set `background`/`foreground` in their terminal config — we want to honor
     /// the exact black-and-white look rather than a named theme's tinted palette).
-    static func from(backgroundHex: String, foregroundHex: String, cursorHex: String? = nil) -> HarnessChromePalette {
+    static func from(backgroundHex: String, foregroundHex: String) -> HarnessChromePalette {
         // One spec for every chrome surface. Tabs, sidebar, pane headers, and the
         // switcher read the resulting palette instead of a hardcoded dark fill.
         let spec = ChromePaletteSpec.resolve(backgroundHex: backgroundHex, foregroundHex: foregroundHex)
         let background = nsColor(spec.surface)
         let foreground = nsColor(spec.textPrimary)
-        let accent = cursorHex.map { color(from: $0) } ?? blend(foreground, toward: NSColor(srgbRed: 0.55, green: 0.7, blue: 1.0, alpha: 1), fraction: 0.3)
+        // Interface focus must remain neutral even when a terminal theme has a vivid cursor.
+        let accentLevel: CGFloat = spec.isDark ? 0.78 : 0.28
+        let accent = NSColor(srgbRed: accentLevel, green: accentLevel, blue: accentLevel, alpha: 1)
         // A pleasant default ANSI-ish set derived from the bg/fg luminance.
         let waiting = NSColor(srgbRed: 0.51, green: 0.69, blue: 0.96, alpha: 1)
         let danger = NSColor(srgbRed: 0.93, green: 0.49, blue: 0.55, alpha: 1)
@@ -125,18 +126,6 @@ struct HarnessChromePalette {
 
     private static func nsColor(_ color: ChromeColor) -> NSColor {
         NSColor(srgbRed: color.red, green: color.green, blue: color.blue, alpha: 1)
-    }
-
-    private static func color(from hex: String) -> NSColor {
-        var cleaned = hex.trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleaned.hasPrefix("#") { cleaned.removeFirst() }
-        guard cleaned.count == 6, let value = UInt64(cleaned, radix: 16) else {
-            return .white
-        }
-        let r = CGFloat((value >> 16) & 0xff) / 255
-        let g = CGFloat((value >> 8) & 0xff) / 255
-        let b = CGFloat(value & 0xff) / 255
-        return NSColor(srgbRed: r, green: g, blue: b, alpha: 1)
     }
 
     /// Opaque mix of `foreground` toward the surface. `fraction` is how far the ink
@@ -220,8 +209,7 @@ enum HarnessChrome {
         )
         current = HarnessChromePalette.from(
             backgroundHex: canvas.backgroundHex,
-            foregroundHex: canvas.foregroundHex,
-            cursorHex: canvas.cursorHex
+            foregroundHex: canvas.foregroundHex
         )
         let storedOpacity = max(0, min(1, opacity))
         backgroundOpacity = storedOpacity

@@ -5,8 +5,8 @@ import UniformTypeIdentifiers
 @MainActor
 final class SessionLibraryController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
     static let shared = SessionLibraryController()
-    private let hosts = NSPopUpButton()
-    private let section = NSSegmentedControl(labels: ["Saved Setups", "Recently Closed"], trackingMode: .selectOne, target: nil, action: nil)
+    private let hosts = HarnessSelect()
+    private let section = HarnessSegmented()
     private let table = NSTableView()
     private let status = NSTextField(wrappingLabelWithString: "")
     private var actionButtons: [String: NSButton] = [:]
@@ -26,17 +26,19 @@ final class SessionLibraryController: NSWindowController, NSTableViewDataSource,
     }
 
     private init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 480), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 650), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "Session Library"
         window.isReleasedWhenClosed = false
         window.contentMinSize = NSSize(width: 820, height: 440)
         super.init(window: window)
         let root = NSStackView()
         root.orientation = .vertical
-        root.alignment = .width
+        root.alignment = .leading
         root.spacing = 12
         root.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
         root.translatesAutoresizingMaskIntoConstraints = false
+        hosts.setAccessibilityLabel("Library host"); hosts.widthAnchor.constraint(equalToConstant: 180).isActive = true
+        section.setSegments(["Saved Setups", "Recently Closed"]); section.setAccessibilityLabel("Library section")
         hosts.target = self; hosts.action = #selector(reload)
         section.selectedSegment = 0; section.target = self; section.action = #selector(changeSection)
         root.addArrangedSubview(NSStackView(views: [hosts, section]))
@@ -44,7 +46,7 @@ final class SessionLibraryController: NSWindowController, NSTableViewDataSource,
         column.title = "Name"
         column.width = 600
         table.addTableColumn(column)
-        table.dataSource = self; table.delegate = self
+        table.dataSource = self; table.delegate = self; table.setAccessibilityLabel("Saved setups and recently closed layouts")
         table.rowHeight = 48
         table.target = self; table.doubleAction = #selector(open)
         let scroll = NSScrollView()
@@ -57,8 +59,8 @@ final class SessionLibraryController: NSWindowController, NSTableViewDataSource,
             [("Open", #selector(open)), ("Open New Copy", #selector(newCopy)), ("Save Current Session", #selector(capture)), ("Edit", #selector(edit)), ("Update from Current", #selector(updateFromCurrent))],
             [("Duplicate", #selector(duplicate)), ("Delete", #selector(delete)), ("Import…", #selector(importSetup)), ("Export…", #selector(exportSetup)), ("Clear Recently Closed", #selector(clearClosed))],
         ] {
-            root.addArrangedSubview(NSStackView(views: actions.map {
-                let button = NSButton(title: $0.0, target: self, action: $0.1)
+            root.addArrangedSubview(HarnessToolPage.actionRows(actions.map {
+                let button = HarnessToolPage.button($0.0, target: self, action: $0.1)
                 actionButtons[$0.0] = button
                 return button
             }))
@@ -70,6 +72,8 @@ final class SessionLibraryController: NSWindowController, NSTableViewDataSource,
         if let content = window.contentView {
             NSLayoutConstraint.activate([root.leadingAnchor.constraint(equalTo: content.leadingAnchor), root.trailingAnchor.constraint(equalTo: content.trailingAnchor), root.topAnchor.constraint(equalTo: content.topAnchor), root.bottomAnchor.constraint(equalTo: content.bottomAnchor)])
         }
+        for view in root.arrangedSubviews { view.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -36).isActive = true }
+        HarnessToolPage.install(in: window, title: "Session library", subtitle: "Save a workspace layout, or return to one you recently closed.", symbol: "square.stack", content: root)
         window.center()
         NotificationCenter.default.addObserver(self, selector: #selector(snapshotChanged), name: NotificationBus.shared.snapshotChanged, object: nil)
     }

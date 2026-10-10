@@ -1,7 +1,7 @@
 import Foundation
 
 /// Terminal session recording — the stable, self-describing format behind
-/// `harness-cli record` and `harness-cli replay`.
+/// protected recording archives and legacy JSON Lines imports.
 ///
 /// # Format (JSON Lines, version 1)
 ///
@@ -28,8 +28,8 @@ import Foundation
 /// - `rows`/`cols` capture the terminal size at that moment.
 /// - `dataBase64` is the raw byte payload, base64-encoded (binary-safe).
 ///
-/// `input` events are part of the format and honored by replay, but the v1
-/// `record` command is a passive observer of a shared surface and does not
+/// `input` events are part of the format and omitted by replay and export. The legacy v1
+/// recorder was a passive observer of a shared surface and does not
 /// synthesize input events for GUI/other-client keystrokes it cannot see.
 public enum RecordingEvent: Equatable, Sendable {
     case metadata(version: Int, createdAt: Date, surfaceID: String)
@@ -222,7 +222,10 @@ public enum TerminalReplay {
 
         for event in events {
             guard let t = event.timeMs else { continue } // metadata anchors t=0
-            pendingDelayMs += max(0, t - lastTimeMs)
+            let (delta, deltaOverflow) = t.subtractingReportingOverflow(lastTimeMs)
+            let forward = t >= lastTimeMs ? (deltaOverflow ? Int.max : delta) : 0
+            let (pending, pendingOverflow) = pendingDelayMs.addingReportingOverflow(forward)
+            pendingDelayMs = pendingOverflow ? Int.max : pending
             lastTimeMs = t
             guard case let .output(_, data) = event else { continue }
             let delay = scaleTiming ? scaledDelayMs(pendingDelayMs, speed: speed) : 0

@@ -208,7 +208,6 @@ enum AgentIconRenderer {
     /// recolor it to the menu's label color). Cached per kind+size+color.
     static func coloredImage(for kind: AgentKind, size: CGFloat, color: NSColor) -> NSImage? {
         guard let template = templateImage(for: kind, size: size) else { return nil }
-        if !template.isTemplate { return template }
         // Key on the actual sRGB components, not `color.hashValue` — a hash collision
         // would hand back an icon baked in the wrong color. A semantic/system color that
         // can't resolve to sRGB falls back to its hash (rare; never crashes).
@@ -277,14 +276,61 @@ enum AgentIconRenderer {
         templateImage(for: kind, size: size) ?? monogramTemplate(kind.chip, size: size)
     }
 
+    /// Only bundled upstream raster marks use this conversion. Their dark backing
+    /// and negative-space pixels become transparent; foreground pixels become a
+    /// white alpha mask. Cache at source resolution before fitting to any UI size.
+    private static func rasterTemplate(for kind: AgentKind, data: Data) -> NSImage? {
+        let key = "raster-template:" + kind.rawValue
+        if let cached = cache[key] { return cached }
+        guard let input = NSImage(data: data)?.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let context = CGContext(data: nil, width: input.width, height: input.height,
+                bitsPerComponent: 8, bytesPerRow: input.width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue),
+              let storage = context.data else { return nil }
+        // CoreGraphics first expands indexed PNGs and converts their color space.
+        context.draw(input, in: CGRect(x: 0, y: 0, width: input.width, height: input.height))
+        let pixels = storage.assumingMemoryBound(to: UInt8.self)
+        let backgroundAlpha = CGFloat(pixels[3]) / 255
+        let background = (0..<3).map { backgroundAlpha == 0 ? CGFloat(0) : CGFloat(pixels[$0]) / (255 * backgroundAlpha) }
+        var bounds = CGRect.null
+        for y in 0..<input.height {
+            for x in 0..<input.width {
+                let offset = y * context.bytesPerRow + x * 4
+                let coverage = CGFloat(pixels[offset + 3]) / 255
+                var contrast: CGFloat = 0
+                if coverage > 0 {
+                    for channel in 0..<3 {
+                        contrast = max(contrast, abs(CGFloat(pixels[offset + channel]) / (255 * coverage) - background[channel]))
+                    }
+                }
+                // Keep edge coverage; solid foreground colors become opaque white.
+                let alpha = UInt8((coverage * min(1, max(0, (contrast - 0.20) / 0.30)) * 255).rounded())
+                for channel in 0..<4 { pixels[offset + channel] = alpha }
+                if alpha > 0 { bounds = bounds.union(CGRect(x: x, y: y, width: 1, height: 1)) }
+            }
+        }
+        guard !bounds.isNull, let cropped = context.makeImage()?.cropping(to: bounds) else { return nil }
+        let image = NSImage(cgImage: cropped, size: bounds.size)
+        image.isTemplate = true
+        cache[key] = image
+        return image
+    }
+
     /// A template image (alpha = silhouette) for the agent, or nil if none exists.
     /// Set `contentTintColor` on the hosting `NSImageView` to color it.
     static func templateImage(for kind: AgentKind, size: CGFloat) -> NSImage? {
         let key = "\(kind.rawValue)@\(Int(size.rounded()))"
         if let cached = cache[key] { return cached }
         if let encoded = AgentIconArt.rasterImages[kind.rawValue],
-           let data = Data(base64Encoded: encoded), let image = NSImage(data: data) {
-            image.size = NSSize(width: size, height: size)
+           let data = Data(base64Encoded: encoded), let mark = rasterTemplate(for: kind, data: data) {
+            let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+                let scale = min(rect.width / mark.size.width, rect.height / mark.size.height)
+                let fitted = NSSize(width: mark.size.width * scale, height: mark.size.height * scale)
+                mark.draw(in: NSRect(x: rect.midX - fitted.width / 2, y: rect.midY - fitted.height / 2, width: fitted.width, height: fitted.height))
+                return true
+            }
+            image.isTemplate = true
             cache[key] = image
             return image
         }

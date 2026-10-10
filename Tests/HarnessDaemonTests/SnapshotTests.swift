@@ -121,7 +121,7 @@ final class SnapshotTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("pane.scroll")
-        let pty = try RealPty(id: "old", cwd: directory.path, shell: "/bin/cat", rows: 4, cols: 10, scrollbackURL: url)
+        let pty = try RealPty(id: "old", cwd: directory.path, shell: "/bin/cat", rows: 4, cols: 10, scrollbackURL: url, historyProtection: testProtection)
         let first = Data("abcdefghijklmnop\r\u{1b}[2Kprompt> ".utf8)
         pty.injectSyntheticOutput(first)
         pty.resize(rows: 6, cols: 20)
@@ -130,7 +130,7 @@ final class SnapshotTests: XCTestCase {
         XCTAssertTrue(waitUntil { pty.ringEnd == UInt64(first.count + second.count + 1) })
         pty.flushScrollback()
         pty.close()
-        let restored = try RealPty(id: "new", cwd: directory.path, shell: "/bin/cat", rows: 8, cols: 30, scrollbackURL: url)
+        let restored = try RealPty(id: "new", cwd: directory.path, shell: "/bin/cat", rows: 8, cols: 30, scrollbackURL: url, historyProtection: testProtection)
         defer { restored.close() }
         let truth = TerminalEmulator(cols: 10, rows: 4)
         truth.feed(first)
@@ -351,23 +351,29 @@ final class SnapshotTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(pty.attachHistory(fromSequence: nil).chunks.first?.sequence ?? 0, before, "sequences keep counting up")
     }
 
-    func testCipherRoundTripAndFileKeyIsOwnerReadWrite() throws {
+    func testLegacyCheckpointMigrationVerifiesNewProtectionBeforeRemovingOldKey() throws {
         let key = Data(repeating: 9, count: 32)
-        let plain = Data("park-me".utf8)
+        let plain = ScreenFrame(vt: Data("park-me".utf8), sequence: 42).encoded()
         let sealed = try XCTUnwrap(SnapshotCipher.seal(plain: plain, key: key))
-        XCTAssertNotEqual(sealed, plain)
         XCTAssertEqual(SnapshotCipher.open(sealed: sealed, key: key), plain)
         XCTAssertNil(SnapshotCipher.open(sealed: sealed, key: Data(repeating: 1, count: 32)))
-
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("harness-snap-key-\(UUID().uuidString)", isDirectory: true)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("harness-snap-migrate-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let created = SnapshotKeyStore.fileLoadOrCreate(directory: directory)
-        XCTAssertEqual(created.count, 32)
-        XCTAssertEqual(SnapshotKeyStore.fileLoadOrCreate(directory: directory), created)
-        let path = directory.appendingPathComponent("snapshot.key").path
-        let perm = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? NSNumber)
-        XCTAssertEqual(perm.uint16Value, UInt16(0o600))
+        let id = UUID().uuidString, url = directory.appendingPathComponent(id + ".park"), keyURL = directory.appendingPathComponent("snapshot.key")
+        try sealed.write(to: url); try key.write(to: keyURL)
+        XCTAssertNotNil(HistoryMigration.checkpoints(directory: directory, legacyKeyURL: keyURL, protection: .unavailable("Locked")))
+        XCTAssertEqual(try Data(contentsOf: url), sealed)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: keyURL.path))
+        let protection = testProtection
+        XCTAssertNil(HistoryMigration.checkpoints(directory: directory, legacyKeyURL: keyURL, protection: protection))
+        XCTAssertEqual(try protection.open(Data(contentsOf: url), identity: "checkpoint:" + id, sequence: 42), plain)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: keyURL.path))
+        var corrupt = sealed; corrupt[corrupt.count - 1] ^= 1
+        try corrupt.write(to: url); try key.write(to: keyURL)
+        XCTAssertNotNil(HistoryMigration.checkpoints(directory: directory, legacyKeyURL: keyURL, protection: protection))
+        XCTAssertEqual(try Data(contentsOf: url), corrupt)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: keyURL.path))
     }
 
     func testReadLoopDoesNotFeedTheParserAndCaptureDoes() throws {
@@ -563,6 +569,14 @@ final class SnapshotTests: XCTestCase {
         return term.captureLines(joinWrapped: false).joined(separator: "\n")
     }
 
+    private var testProtection: HistoryProtection {
+        #if os(macOS)
+        return try! HistoryProtection(keyMaterial: Data(repeating: 29, count: 32))
+        #else
+        return .system()
+        #endif
+    }
+
     private func catPty(scrollbackURL: URL? = nil) throws -> RealPty {
         try RealPty(
             id: UUID().uuidString,
@@ -571,7 +585,7 @@ final class SnapshotTests: XCTestCase {
             rows: 24,
             cols: 80,
             scrollbackBytes: 64 * 1024,
-            scrollbackURL: scrollbackURL
+            scrollbackURL: scrollbackURL, historyProtection: testProtection
         )
     }
 }
@@ -587,6 +601,12 @@ final class PastedFilesTests: XCTestCase {
         XCTAssertTrue(path.hasSuffix("-shot.png"))
         let mode = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? NSNumber)
         XCTAssertEqual(mode.uint16Value, 0o600)
+        let target = directory.appendingPathComponent("external", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let link = directory.appendingPathComponent("redirect")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        guard case .failure = PastedFiles.write(Data("private".utf8), named: "secret.png", in: link) else { return XCTFail("Must not follow an upload directory link") }
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: target.path).isEmpty)
         guard case .failure = PastedFiles.write(Data(count: PastedFiles.maxBytes + 1), named: "big", in: directory) else {
             return XCTFail("too big")
         }

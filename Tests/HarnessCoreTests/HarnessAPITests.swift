@@ -2,6 +2,26 @@ import XCTest
 @testable import HarnessCore
 
 final class HarnessAPITests: XCTestCase {
+    func testAccessDenialPrecedesDaemonConnection() throws {
+        let client = DaemonClient(endpoint: .unix(path: "/tmp/harness-no-service-\(UUID().uuidString)"))
+        let localOnly = APIExecutor.call(method: "pane.theme", arguments: [:], client: client, exposure: .mobile)
+        XCTAssertEqual(localOnly.exitCode, Int32(APIExit.badArguments.rawValue))
+        XCTAssertTrue(localOnly.message?.contains("unavailable through mobile") == true)
+        let write = APIExecutor.call(method: "pane.write", arguments: [:], client: client, exposure: .mcp, allowWrite: false)
+        XCTAssertEqual(write.exitCode, Int32(APIExit.badArguments.rawValue))
+        XCTAssertTrue(write.message?.contains("explicit write access") == true)
+        XCTAssertEqual(HarnessAPI.method(named: "schedule.save")?.access.exposures, [.cli])
+        XCTAssertEqual(HarnessAPI.method(named: "schedule.list")?.access.effect, .read)
+        XCTAssertTrue(IPCRequest.activity(.schedules(requestID: UUID(), operation: .list(offset: 0, limit: 100))).requiresLocalOwner)
+        XCTAssertTrue(IPCRequest.activity(.notifications(.status)).requiresLocalOwner)
+        XCTAssertFalse(IPCRequest.activity(.list(hostID: nil, surfaceID: nil, activeOnly: false, offset: 0, limit: 100)).requiresLocalOwner)
+        XCTAssertEqual(HarnessAPI.method(named: "worktree.inspect")?.access.effect, .write, "Inspection can reconcile durable partial-operation state")
+        XCTAssertEqual(HarnessAPI.method(named: "worktree.compare")?.access.effect, .read)
+        XCTAssertEqual(HarnessAPI.method(named: "worktree.create")?.access.exposures, [.cli])
+        XCTAssertEqual(HarnessAPI.method(named: "pane.capture")?.access.effect, .read)
+        XCTAssertEqual(HarnessAPI.method(named: "pane.write")?.access.effect, .write)
+        XCTAssertTrue(try HarnessAPI.describeJSON(named: "pane.capture").contains("\"access\""))
+    }
     func testDescribePaneCapturePrintsSchema() throws {
         let json = try HarnessAPI.describeJSON(named: "pane.capture")
         XCTAssertTrue(json.contains("\"$schema\""))

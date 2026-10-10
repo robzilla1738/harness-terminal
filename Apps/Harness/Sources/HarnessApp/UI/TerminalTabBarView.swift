@@ -98,16 +98,41 @@ final class TerminalTabBarView: NSView {
     private weak var draggingPill: TabPillView?
     private var lastPeekUptime: TimeInterval = 0
 
+    private var peekGestureTriggered = false
+    private var peekGestureDelta = NSPoint.zero
+
     public override func scrollWheel(with event: NSEvent) {
-        let horizontal = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) && abs(event.scrollingDeltaX) > 8
-        guard horizontal else {
-            super.scrollWheel(with: event)
-            return
-        }
-        let now = ProcessInfo.processInfo.systemUptime
-        if now - lastPeekUptime > 0.45 {
-            lastPeekUptime = now
+        // Momentum belongs to the gesture that already opened the drawer. A long
+        // swipe must never cycle through multiple views on a wall-clock debounce.
+        guard event.momentumPhase.isEmpty else { return }
+        if !event.phase.isEmpty {
+            if event.phase.contains(.began) {
+                peekGestureTriggered = false
+                peekGestureDelta = .zero
+            }
+            defer {
+                if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
+                    peekGestureTriggered = false
+                    peekGestureDelta = .zero
+                }
+            }
+            peekGestureDelta.x += event.scrollingDeltaX
+            peekGestureDelta.y += event.scrollingDeltaY
+            guard !peekGestureTriggered,
+                  abs(peekGestureDelta.x) >= 24,
+                  abs(peekGestureDelta.x) > abs(peekGestureDelta.y) else { return }
+            peekGestureTriggered = true
             delegate?.tabBarDidRequestPeek()
+        } else {
+            // Traditional horizontal wheel events have no gesture phases.
+            guard abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY), abs(event.scrollingDeltaX) > 8 else {
+                super.scrollWheel(with: event); return
+            }
+            let now = ProcessInfo.processInfo.systemUptime
+            if now - lastPeekUptime > 0.45 {
+                lastPeekUptime = now
+                delegate?.tabBarDidRequestPeek()
+            }
         }
     }
     private var dragGrabOffsetX: CGFloat = 0

@@ -150,8 +150,8 @@ home_for_app() {
 
 # Target processes by bundle path, never by app name: `tell application "Harness" to quit`
 # resolves by NAME and can kill the user's live terminal instead of the launched instance.
-app_running() { pgrep -f "$1/Contents/MacOS/" >/dev/null 2>&1; }
-quit_app() { pkill -f "$1/Contents/MacOS/" 2>/dev/null || true; }
+app_running() { pgrep -f "$1/Contents/MacOS/Harness$" >/dev/null 2>&1; }
+quit_app() { pkill -f "$1/Contents/MacOS/Harness$" 2>/dev/null || true; }
 
 cold_start() {
     [ "$(uname)" = "Darwin" ] || die "cold-start runs on macOS only"
@@ -182,12 +182,9 @@ cold_start() {
             echo "run$i	MISSING	startup.log never appeared" >> "$result"
         fi
         quit_app "$app"
-        # True cold start per iteration: debug builds spawn the daemon as a child process
-        # under the same bundle path — quit_app's pkill catches it, but a respawn-in-flight
-        # or an orphan from an earlier session would keep daemonConnected/firstSnapshot warm.
-        # Kill any straggler and drop its socket/pid so the next launch boots a fresh daemon.
-        pkill -f "$app/Contents/MacOS/HarnessDaemon" 2>/dev/null || true
-        rm -f "$(home_for_app "$app")/harness.sock" "$(home_for_app "$app")/daemon.pid"
+        # A performance check may not destroy shells retained by the session service.
+        HARNESS_HOME="$(home_for_app "$app")" "$CLI" kill-server --if-empty ||
+            die "cold-start: live shells were preserved; close them before continuing"
         sleep 1
     done
     note "harness cold-start phases -> $result"

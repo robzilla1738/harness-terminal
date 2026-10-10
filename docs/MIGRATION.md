@@ -29,12 +29,15 @@ into `macos-system` appearance mode for new defaults.
 **Sources tried:** the importer checks its supported compatibility paths in order and
 merges matches, with later files overriding earlier files.
 
-Import happens automatically on first run. When the source config's fingerprint changes,
-Harness re-applies it only if you have not customized visual settings; otherwise it records the
-new fingerprint and leaves your Harness appearance untouched. Re-import manually any time:
+Fresh installs keep Harness Graphite and the standard appearance defaults. Open
+**Harness → Import Terminal Settings…** or **Settings → Tools → Import Settings**
+to review and apply a source configuration. Automatic discovery does not replace
+those defaults or overwrite an existing customized appearance. Source changes
+remain available for a reviewed re-import.
 
-- **Settings → Appearance → Restore Defaults…** (re-seeds from the imported config), or
-- the `source-config` command (prefix `r` in Full Terminal mode).
+**Settings → Appearance → Restore Defaults…** restores Harness’s standard
+appearance. The explicit `source-config` command (prefix `r` in Full Terminal
+mode) remains available for source-config workflows.
 
 Comment lines start with `#`; `#` is **not** stripped from values (so hex colors survive).
 

@@ -2,144 +2,153 @@ import AppKit
 import HarnessCore
 import HarnessTerminalKit
 
-/// Tab peek from a key (⌃⌘P) or a horizontal swipe on the tab bar: each tab's panes drawn
-/// live (`TabThumbnailView`). Reads the live grid size and never writes it.
+/// A window-attached tab drawer. Thumbnails never resize or acquire terminal PTYs.
 @MainActor
 enum TabPeekController {
     private static var model = TabPeek(rows: 0, columns: 0)
-    private static var panel: NSPanel?
+    private static var panel: KeyablePanel?
+    private static weak var parent: NSWindow?
+    private static weak var context: WindowContext?
     private static var keyView: TabPeekKeyView?
+    private static var observers: [NSObjectProtocol] = []
+    private static var clickMonitor: Any?
+    private static var generation = 0
+    private static var displayedTabs: [TabPeek.Tab]?
 
-    static func toggle() {
-        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        if model.phase == .closed {
-            let size = liveGridSize()
-            model = TabPeek(rows: size.rows, columns: size.columns, tabs: loadTabs())
-        }
-        model.toggle(reduceMotion: reduceMotion)
-        if model.phase == .closed {
-            hide()
-            return
-        }
-        present(reduceMotion: reduceMotion)
-    }
-
-    static func move(_ delta: Int) {
-        model.move(delta: delta)
+    static func toggle(relativeTo window: NSWindow? = nil) {
+        if panel != nil { close(); return }
+        guard let window = window ?? NSApp.keyWindow ?? NSApp.mainWindow,
+              let context = WindowContexts.all.first(where: { $0.window === window }) else { return }
+        parent = window
+        self.context = context
+        let host = context.tab?.rootPane.allSurfaceIDs().first.flatMap { SessionCoordinator.shared.terminalHostIfExists(for: $0) }
+        let size = host?.gridCellCount ?? (rows: 24, columns: 80)
+        model = TabPeek(rows: size.rows, columns: size.columns, tabs: loadTabs())
+        model.toggle()
+        if let active = context.tab?.id.uuidString { model.select(id: active) }
+        let view = TabPeekKeyView()
+        let panel = KeyablePanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.backgroundColor = .clear; panel.isOpaque = false; panel.hasShadow = true
+        panel.contentView = view
+        panel.setAccessibilityLabel("Tab Peek")
+        self.panel = panel; keyView = view
         refresh()
+        position()
+        window.addChildWindow(panel, ordered: .above)
+        let destination = panel.frame
+        let reduced = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if !reduced {
+            panel.alphaValue = 0
+            panel.setFrameOrigin(NSPoint(x: destination.minX + 14, y: destination.minY))
+        }
+        panel.makeKeyAndOrderFront(nil)
+        panel.makeFirstResponder(view)
+        if !reduced {
+            NSAnimationContext.runAnimationGroup { animation in
+                animation.duration = HarnessDesign.Motion.fast
+                animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                panel.animator().alphaValue = 1
+                panel.animator().setFrame(destination, display: true)
+            }
+        }
+        let nc = NotificationCenter.default
+        for name in [NSWindow.didResizeNotification, NSWindow.didMoveNotification] {
+            observers.append(nc.addObserver(forName: name, object: window, queue: .main) { _ in
+                MainActor.assumeIsolated { position() }
+            })
+        }
+        for (name, object) in [(NSWindow.willCloseNotification, window as AnyObject),
+                               (NSWindow.willMiniaturizeNotification, window as AnyObject),
+                               (NSApplication.didResignActiveNotification, NSApp as AnyObject)] {
+            observers.append(nc.addObserver(forName: name, object: object, queue: .main) { _ in
+                MainActor.assumeIsolated { close(restoreFocus: false) }
+            })
+        }
+        observers.append(nc.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { _ in
+            MainActor.assumeIsolated { close(restoreFocus: false) }
+        })
+        observers.append(nc.addObserver(forName: NotificationBus.shared.snapshotChanged, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { refresh() }
+        })
+        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { event in
+            MainActor.assumeIsolated { if event.window !== self.panel { close(restoreFocus: false) } }
+            return event
+        }
     }
 
-    static func close() {
-        if model.phase != .closed { model.toggle(reduceMotion: false) }
-        while model.phase != .closed { model.toggle(reduceMotion: false) }
-        hide()
+    static func move(_ delta: Int) { model.move(delta: delta); keyView?.select(selectedID) }
+    private static var selectedID: String? { model.tabs.indices.contains(model.selection) ? model.tabs[model.selection].id : nil }
+
+    static func close(restoreFocus: Bool = true) {
+        guard let panel else { return }
+        generation += 1
+        let window = parent
+        observers.forEach(NotificationCenter.default.removeObserver(_:)); observers = []
+        if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }; clickMonitor = nil
+        self.panel = nil; keyView = nil; parent = nil; context = nil
+        model = TabPeek(rows: 0, columns: 0)
+        displayedTabs = nil
+        panel.ignoresMouseEvents = true
+        if restoreFocus, window?.isVisible == true { window?.makeKey() }
+        let finish: @MainActor @Sendable () -> Void = {
+            window?.removeChildWindow(panel)
+            panel.orderOut(nil); panel.contentView = nil
+        }
+        if !restoreFocus || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            finish()
+        } else {
+            NSAnimationContext.runAnimationGroup { animation in
+                animation.duration = 0.12
+                animation.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                panel.animator().alphaValue = 0
+            } completionHandler: { MainActor.assumeIsolated { finish() } }
+        }
     }
 
-    static func activateSelection() {
-        guard model.tabs.indices.contains(model.selection) else { return }
-        let id = model.tabs[model.selection].id
-        guard let uuid = UUID(uuidString: id),
-              let workspaceID = SessionCoordinator.shared.snapshot.activeWorkspaceID
-        else { return }
-        SessionCoordinator.shared.selectTab(workspaceID: workspaceID, tabID: uuid)
+    static func activateSelection() { if let selectedID { activate(selectedID) } }
+    static func activate(_ id: String) {
+        guard let context, let workspace = context.workspace, let uuid = UUID(uuidString: id),
+              context.session?.tabs.contains(where: { $0.id == uuid }) == true else { close(); return }
+        let window = parent
         close()
-    }
-
-    private static func liveGridSize() -> (rows: Int, columns: Int) {
-        let coordinator = SessionCoordinator.shared
-        guard let surfaceID = coordinator.activeSurfaceID,
-              let host = coordinator.terminalHostIfExists(for: surfaceID)
-        else { return (24, 80) }
-        return host.gridCellCount
+        window?.makeKey()
+        SessionCoordinator.shared.selectTab(workspaceID: workspace.id, tabID: uuid)
     }
 
     private static func loadTabs() -> [TabPeek.Tab] {
-        let coordinator = SessionCoordinator.shared
-        let tabs = coordinator.snapshot.activeWorkspace?.tabs ?? []
-        return tabs.map { tab in
-            let base = SurfaceIdentity.label(
-                directory: tab.cwd,
-                program: tab.currentCommand,
-                agent: tab.agent?.kind.commandToken
-            )
-            return TabPeek.Tab(
-                id: tab.id.uuidString,
-                title: TabChip.title(base: base, app: tab.programMark?.app),
-                layout: tab.rootPane,
-                mark: tab.programMark
-            )
+        (context?.session?.tabs ?? []).map { tab in
+            let base = SurfaceIdentity.label(directory: tab.cwd, program: tab.currentCommand, agent: tab.agent?.kind.commandToken)
+            return TabPeek.Tab(id: tab.id.uuidString, title: TabChip.title(base: base, app: tab.programMark?.app), layout: tab.rootPane, mark: tab.programMark)
         }
-    }
-
-    /// The thumbnails stop with their rows.
-    private static func hide() {
-        panel?.orderOut(nil)
-        keyView?.clear()
-    }
-
-    private static func present(reduceMotion: Bool) {
-        let view = keyView ?? TabPeekKeyView()
-        keyView = view
-        if panel == nil {
-            let panel = KeyablePanel(
-                contentRect: NSRect(x: 0, y: 0, width: 320, height: 420),
-                styleMask: [.borderless, .nonactivatingPanel],
-                backing: .buffered,
-                defer: false
-            )
-            panel.isFloatingPanel = true
-            panel.level = .floating
-            panel.backgroundColor = .clear
-            panel.isOpaque = false
-            panel.hasShadow = true
-            panel.contentView = view
-            self.panel = panel
-        }
-        refresh()
-        // Panes without a terminal in this app show the daemon's capture, fetched off the main thread.
-        TabThumbnailView.capture(view.capturedSurfaces) { captures in
-            guard model.phase != .closed else { return }
-            view.show(captures)
-        }
-        guard let panel, let window = NSApp.keyWindow ?? NSApp.mainWindow else { return }
-        let size = model.phase == .overview
-            ? NSSize(width: 520, height: 460)
-            : NSSize(width: 280, height: 360)
-        let destination: NSPoint
-        if model.phase == .peeking {
-            destination = NSPoint(x: window.frame.maxX - size.width - 12, y: window.frame.midY - size.height / 2)
-        } else {
-            destination = NSPoint(x: window.frame.midX - size.width / 2, y: window.frame.midY - size.height / 2)
-        }
-        let start = NSPoint(x: window.frame.maxX, y: destination.y)
-        panel.setContentSize(size)
-        if reduceMotion || model.phase == .overview {
-            panel.setFrameOrigin(destination)
-        } else {
-            panel.setFrameOrigin(start)
-            panel.orderFront(nil)
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = HarnessDesign.Motion.fast
-                panel.animator().setFrameOrigin(destination)
-            }
-            panel.makeKey()
-            panel.makeFirstResponder(view)
-            return
-        }
-        panel.orderFront(nil)
-        panel.makeKey()
-        panel.makeFirstResponder(view)
     }
 
     private static func refresh() {
-        let visible: [TabPeek.Tab]
-        if model.phase == .peeking, let active = SessionCoordinator.shared.snapshot.activeWorkspace?.activeTabID?.uuidString {
-            visible = model.tabs.filter { $0.id != active }
-        } else {
-            visible = model.tabs
+        guard let view = keyView else { return }
+        let tabs = loadTabs()
+        let changed = displayedTabs != tabs
+        displayedTabs = tabs
+        model.replaceTabs(tabs)
+        view.show(tabs, selected: selectedID)
+        position()
+        guard changed else { return }
+        generation += 1
+        let ticket = generation
+        TabThumbnailView.capture(view.capturedSurfaces) { [weak view] captures in
+            guard ticket == generation, panel != nil else { return }
+            view?.show(captures)
         }
-        let selected = model.tabs.indices.contains(model.selection) ? model.tabs[model.selection].id : nil
-        keyView?.show(visible, selected: selected)
+    }
+
+    private static func position() {
+        guard let panel, let parent, let view = keyView else { return }
+        // Inside the trailing edge: remains usable at screen edges and never changes the PTY grid.
+        let frame = parent.frame
+        let width = min(320, max(240, frame.width - 32))
+        let height = min(view.preferredHeight(width: width), max(120, frame.height - HarnessDesign.tabBarHeight - 32))
+        panel.setFrame(NSRect(x: frame.maxX - width - 16,
+                              y: frame.maxY - HarnessDesign.tabBarHeight - 16 - height,
+                              width: width, height: height), display: true)
     }
 }
 
@@ -147,146 +156,142 @@ enum TabPeekController {
 private final class TabPeekKeyView: NSView {
     private let scroll = NSScrollView()
     private let list = FlippedListView()
-    private let empty = NSTextField(labelWithString: "No other tabs")
+    private let title = NSTextField(labelWithString: "Tab Peek")
+    private let hint = NSTextField(labelWithString: "↑ ↓ to choose · Return to open · Esc to close")
+    private let empty = NSTextField(labelWithString: "No tabs available")
+    private let closeButton = HarnessPillButton(title: "Close", kind: .secondary)
     private var rows: [TabPeekRowView] = []
-    /// Every tab's row while the peek is open, kept across steps so a thumbnail isn't rebuilt.
     private var rowsByID: [String: TabPeekRowView] = [:]
-
+    private var tabs: [TabPeek.Tab] = []
     private static let inset: CGFloat = 12
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.94).cgColor
-        layer?.cornerRadius = HarnessDesign.Radius.overlay
-        scroll.drawsBackground = false
-        scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
+        layer?.cornerRadius = HarnessDesign.Radius.panel
+        layer?.cornerCurve = .continuous
+        layer?.borderWidth = 1
+        layer?.masksToBounds = true
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        hint.font = .systemFont(ofSize: 10)
+        empty.font = .systemFont(ofSize: 12)
+        closeButton.target = self; closeButton.action = #selector(dismiss)
+        scroll.drawsBackground = false; scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
         scroll.documentView = list
-        empty.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        empty.textColor = .labelColor
-        for view in [scroll, empty] {
-            view.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(view)
-        }
+        for child in [title, hint, closeButton, scroll, empty] { child.translatesAutoresizingMaskIntoConstraints = false; addSubview(child) }
         NSLayoutConstraint.activate([
+            title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.inset),
+            title.centerYAnchor.constraint(equalTo: closeButton.centerYAnchor),
+            closeButton.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.inset),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.inset),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.inset),
-            scroll.topAnchor.constraint(equalTo: topAnchor, constant: Self.inset),
-            scroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Self.inset),
-            empty.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.inset),
-            empty.topAnchor.constraint(equalTo: topAnchor, constant: Self.inset),
+            scroll.topAnchor.constraint(equalTo: topAnchor, constant: 48),
+            scroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -32),
+            hint.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.inset),
+            hint.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
+            empty.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
+            empty.topAnchor.constraint(equalTo: scroll.topAnchor),
         ])
     }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { nil }
-
-    /// Panes in the shown tabs with no terminal in this app: they need captures.
+    @available(*, unavailable) required init?(coder: NSCoder) { nil }
+    @objc private func dismiss() { TabPeekController.close() }
     var capturedSurfaces: [SurfaceID] { rows.flatMap(\.preview.capturedSurfaces) }
-
+    func preferredHeight(width: CGFloat) -> CGFloat {
+        let rowHeight = TabPeekRowView.height(forWidth: width - 2 * Self.inset)
+        return 80 + max(36, CGFloat(rows.count) * (rowHeight + 12) - 12)
+    }
     func show(_ tabs: [TabPeek.Tab], selected: String?) {
-        rows.forEach { $0.removeFromSuperview() }
-        rows = tabs.map { tab in
-            let row = rowsByID[tab.id] ?? TabPeekRowView(tab: tab)
-            rowsByID[tab.id] = row
-            row.setSelected(tab.id == selected)
-            list.addSubview(row)
-            return row
+        if self.tabs != tabs {
+            let old = Dictionary(uniqueKeysWithValues: self.tabs.map { ($0.id, $0) })
+            rows.forEach { $0.removeFromSuperview() }
+            rows = tabs.map { tab in
+                let row = old[tab.id] == tab ? rowsByID[tab.id] ?? TabPeekRowView(tab: tab) : TabPeekRowView(tab: tab)
+                list.addSubview(row)
+                return row
+            }
+            self.tabs = tabs
+            rowsByID = Dictionary(uniqueKeysWithValues: zip(tabs.map(\.id), rows))
         }
+        let chrome = HarnessChrome.current
+        appearance = NSAppearance(named: chrome.isDark ? .darkAqua : .aqua)
+        layer?.backgroundColor = chrome.sidebarBackground.cgColor
+        layer?.borderColor = chrome.borderStrong.cgColor
+        title.textColor = chrome.textPrimary; hint.textColor = chrome.textSecondary; empty.textColor = chrome.textSecondary
         empty.isHidden = !rows.isEmpty
-        needsLayout = true
-        layoutSubtreeIfNeeded()
-        if let row = rows.first(where: \.isSelected) { list.scrollToVisible(row.frame) }
+        select(selected)
     }
-
-    func show(_ captures: [SurfaceID: TerminalThumbnail]) {
-        rows.forEach { $0.preview.show(captures) }
+    func select(_ id: String?) {
+        for (key, row) in rowsByID { row.setSelected(key == id) }
+        needsLayout = true; layoutSubtreeIfNeeded()
+        if let id, let row = rowsByID[id] { list.scrollToVisible(row.frame) }
     }
-
-    func clear() {
-        rows.forEach { $0.removeFromSuperview() }
-        rows = []
-        rowsByID = [:]
-    }
-
+    func show(_ captures: [SurfaceID: TerminalThumbnail]) { rows.forEach { $0.preview.show(captures) } }
     override func layout() {
         super.layout()
         let width = scroll.contentSize.width
         let height = TabPeekRowView.height(forWidth: width)
-        let gap = HarnessDesign.Spacing.lg
         for (index, row) in rows.enumerated() {
-            row.frame = NSRect(x: 0, y: CGFloat(index) * (height + gap), width: width, height: height)
+            row.frame = NSRect(x: 0, y: CGFloat(index) * (height + 12), width: width, height: height)
         }
-        list.frame = NSRect(x: 0, y: 0, width: width, height: max(CGFloat(rows.count) * (height + gap) - gap, 0))
+        list.frame = NSRect(x: 0, y: 0, width: width, height: max(CGFloat(rows.count) * (height + 12) - 12, 0))
     }
-
     override var acceptsFirstResponder: Bool { true }
-
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
-        case 123, 125: TabPeekController.move(-1)
-        case 124, 126: TabPeekController.move(1)
+        case 123, 126: TabPeekController.move(-1)
+        case 124, 125: TabPeekController.move(1)
         case 53: TabPeekController.close()
         case 36: TabPeekController.activateSelection()
         default: super.keyDown(with: event)
         }
     }
+    override func cancelOperation(_ sender: Any?) { TabPeekController.close() }
 }
 
-private final class FlippedListView: NSView {
-    override var isFlipped: Bool { true }
-}
+private final class FlippedListView: NSView { override var isFlipped: Bool { true } }
 
-/// One tab in the peek: its title (and attention badge) over its panes, drawn live.
 @MainActor
 private final class TabPeekRowView: NSView {
     let preview: TabThumbnailView
     private let title = NSTextField(labelWithString: "")
-    private(set) var isSelected = false
-
-    private static let titleHeight: CGFloat = 16
-    /// Preview height over width: about a terminal window's shape, a little flatter to fit more.
-    private static let previewAspect: CGFloat = 0.5
-
-    static func height(forWidth width: CGFloat) -> CGFloat {
-        (titleHeight + HarnessDesign.Spacing.xs + width * previewAspect).rounded()
-    }
-
+    private let id: String
+    static func height(forWidth width: CGFloat) -> CGFloat { (28 + width * 0.5).rounded() }
     init(tab: TabPeek.Tab) {
+        id = tab.id
         preview = TabThumbnailView(root: tab.layout)
         super.init(frame: .zero)
         let badge = TabPeek.badge(tab.mark)
-        title.stringValue = tab.title + (badge.isEmpty ? "" : " [\(badge)]")
-        title.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        title.stringValue = tab.title + (badge.isEmpty ? "" : " · \(badge)")
+        title.font = .systemFont(ofSize: 12, weight: .medium)
         title.lineBreakMode = .byTruncatingMiddle
+        wantsLayer = true
+        layer?.cornerRadius = HarnessDesign.Radius.card; layer?.cornerCurve = .continuous
         preview.wantsLayer = true
-        preview.layer?.cornerRadius = HarnessDesign.Radius.control
-        preview.layer?.cornerCurve = .continuous
-        for view in [title, preview] {
-            view.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(view)
-        }
+        preview.layer?.cornerRadius = HarnessDesign.Radius.control; preview.layer?.masksToBounds = true
+        for child in [title, preview] { child.translatesAutoresizingMaskIntoConstraints = false; addSubview(child) }
         NSLayoutConstraint.activate([
-            title.leadingAnchor.constraint(equalTo: leadingAnchor),
-            title.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
-            title.topAnchor.constraint(equalTo: topAnchor),
-            title.heightAnchor.constraint(equalToConstant: Self.titleHeight),
-            preview.leadingAnchor.constraint(equalTo: leadingAnchor),
-            preview.trailingAnchor.constraint(equalTo: trailingAnchor),
-            preview.topAnchor.constraint(equalTo: title.bottomAnchor, constant: HarnessDesign.Spacing.xs),
-            preview.bottomAnchor.constraint(equalTo: bottomAnchor),
+            title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            title.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            title.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            title.heightAnchor.constraint(equalToConstant: 16),
+            preview.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            preview.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            preview.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 6),
+            preview.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
         ])
-        setSelected(false)
+        setAccessibilityElement(true); setAccessibilityRole(.button); setAccessibilityLabel(title.stringValue)
     }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { nil }
-
+    @available(*, unavailable) required init?(coder: NSCoder) { nil }
     func setSelected(_ selected: Bool) {
-        isSelected = selected
-        title.textColor = selected ? .labelColor : .secondaryLabelColor
-        preview.layer?.borderWidth = selected ? 2 : 0
-        preview.layer?.borderColor = NSColor.controlAccentColor.cgColor
+        let chrome = HarnessChrome.current
+        title.textColor = selected ? chrome.textPrimary : chrome.textSecondary
+        layer?.backgroundColor = (selected ? chrome.rowSelectedFill : chrome.surfaceElevated).cgColor
+        layer?.borderWidth = 1
+        layer?.borderColor = (selected ? chrome.focusRing : chrome.border).cgColor
+        setAccessibilityValue(selected ? "Selected" : "")
     }
+    override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) == nil ? nil : self }
+    override func mouseDown(with event: NSEvent) { TabPeekController.activate(id) }
+    override func accessibilityPerformPress() -> Bool { TabPeekController.activate(id); return true }
 }

@@ -13,7 +13,7 @@ extension SurfaceRegistry {
     /// file records the current build immediately, so the banner never repeats — not on
     /// later surfaces, and not after a daemon restart. The on-screen render stays
     /// at-most-once per run regardless; only the durable ack is retried on failure.
-    func injectVersionBannerIfPending(into session: RealPty, columns: Int) {
+    func injectVersionBannerIfPending(into session: SessionPty, columns: Int) {
         if versionAckRetryNeeded { versionAckRetryNeeded = !versionBannerStore.markSeen() }
         guard let banner = pendingVersionBanner else { return }
         pendingVersionBanner = nil

@@ -52,8 +52,26 @@ public struct SettingsImport: Codable, Sendable {
     public func saveBackup(selected: Set<String>) throws {
         var backup = self
         backup.changes = changes.filter { selected.contains($0.key) || $0.key == "importedConfigSignature" }
-        try JSONEncoder().encode(backup).write(to: Self.backupURL, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: Self.backupURL.path)
+        let data = try JSONEncoder().encode(backup), prior = try PrivateFile.read(Self.backupURL)
+        _ = try PrivateFile.replace(Self.backupURL, data: data, expected: prior, backup: true)
+    }
+
+    /// Apply only reviewed fields to the exact file used for the preview. Unknown
+    /// fields and daemon-owned sections stay intact; a concurrent edit aborts.
+    @discardableResult
+    public func applyFile(at url: URL, expected: Data?, selected: Set<String>) throws -> URL? {
+        guard !selected.isEmpty, selected.isSubset(of: Set(changes.map(\.key))) else {
+            throw SetupError.invalid("Select supported fields from the import preview.")
+        }
+        var values = try expected.map { try JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        guard values != nil else { throw SetupError.invalid("The settings file is not a JSON object.") }
+        for change in changes where selected.contains(change.key) || change.key == "importedConfigSignature" {
+            let current = try Self.data(values?[change.key])
+            // Absent persisted defaults are equivalent to the preview's default.
+            if current != nil, current != change.before { throw SetupError.invalid("Settings changed since this import preview. Preview again.") }
+            values?[change.key] = try change.after.map { try JSONSerialization.jsonObject(with: $0, options: [.fragmentsAllowed]) }
+        }
+        return try PrivateFile.replace(url, data: JSONSerialization.data(withJSONObject: values!, options: [.sortedKeys]), expected: expected, backup: true)
     }
 
     public func undo(in settings: HarnessSettings) throws -> HarnessSettings {

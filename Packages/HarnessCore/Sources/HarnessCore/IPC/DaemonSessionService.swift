@@ -59,7 +59,7 @@ public final class DaemonSessionService: @unchecked Sendable {
     public func request(_ ipcRequest: IPCRequest, timeout: TimeInterval) throws -> IPCResponse {
         let start = DispatchTime.now().uptimeNanoseconds
         defer { Self.latency.record(start: start, request: ipcRequest) }
-        let response = try currentClient().request(ipcRequest, timeout: timeout)
+        let response = try currentClient().requestForCurrentClient(ipcRequest, timeout: timeout)
         if case let .error(message) = response {
             throw DaemonSessionError.daemonError(message)
         }
@@ -114,11 +114,12 @@ public final class DaemonSessionService: @unchecked Sendable {
     @discardableResult
     public func subscribeSnapshot(
         label: String? = nil,
+        capabilities: [String] = [],
         onRevision: @escaping @Sendable (Int) -> Void,
         onDirective: (@Sendable (ClientDirective) -> Void)? = nil,
         onEnd: (@Sendable () -> Void)? = nil
     ) throws -> DaemonSubscription {
-        try currentClient().subscribeSnapshot(label: label, onRevision: onRevision, onDirective: onDirective, onEnd: onEnd)
+        try currentClient().subscribeSnapshot(label: label, capabilities: capabilities, onRevision: onRevision, onDirective: onDirective, onEnd: onEnd)
     }
 
     public func fetchSnapshot() throws -> SessionSnapshot {

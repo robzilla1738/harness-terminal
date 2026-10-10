@@ -87,6 +87,16 @@ public struct PaneLeaf: Codable, Sendable, Equatable {
     public var command: String?
     public var activity: PaneActivity?
     public var shell: String?
+    /// Absent in earlier layouts means terminal content.
+    public var content: PaneContent?
+    public var paneContent: PaneContent { content ?? .terminal }
+    public var lastAgentRunID: UUID?
+    /// Structural one-shot launch identity. Restore creates a fresh shell, never
+    /// repeats the workload or persists its prompt/argv as shell startup content.
+    public var workloadID: UUID?
+    public var workloadProvider: AgentKind?
+    /// Explicit per-pane consent. Absent in older layouts means manual resume.
+    public var resumeAutomatically: Bool?
 
     public init(
         id: PaneID = UUID(),

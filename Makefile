@@ -22,25 +22,18 @@ bench-check:
 preview:
 	./Scripts/preview.sh
 
-# preview-stop prefers a PID file (.harness-preview/.preview-pids, one PID per line) when
-# present, falling back to a pkill pattern that deliberately does NOT embed $(CURDIR):
-# the old '$(CURDIR)/...' pattern broke on repo paths containing spaces (the shell split
-# it into multiple pkill arguments). The bundle-relative pattern matches only the preview
-# app's binaries regardless of where the repo lives. preview.sh launches via `open` (no
-# child PID to record), so today the fallback is the normal path; anything that starts
-# the preview binaries directly can write the PID file to get precise targeting.
+# Stop only this preview GUI. The service uses an atomic empty check; explicit
+# FORCE=1 passes --force and interrupts the isolated preview's shells/programs.
 preview-stop:
-	@if [ -f .harness-preview/.preview-pids ]; then \
-		while IFS= read -r pid; do \
-			[ -n "$$pid" ] && kill "$$pid" 2>/dev/null || true; \
-		done < .harness-preview/.preview-pids; \
-		rm -f .harness-preview/.preview-pids; \
-	else \
-		pkill -f 'HarnessPreview.app/Contents/MacOS/Harness' 2>/dev/null || true; \
-		pkill -f 'HarnessPreview.app/Contents/MacOS/HarnessDaemon' 2>/dev/null || true; \
+	@pattern="$$(python3 -c 'import re,sys; print(re.escape(sys.argv[1]) + "$$")' "$(CURDIR)/.harness-preview/HarnessPreview.app/Contents/MacOS/Harness")"; pkill -f "$$pattern" 2>/dev/null || true
+	@products="$$(swift build --show-bin-path)"; \
+	if [ -e .harness-preview/daemon.pid ] || [ -e .harness-preview/harness.sock ]; then \
+		authorization=--if-empty; \
+		if [ "$(FORCE)" = 1 ]; then authorization=--force; fi; \
+		HARNESS_HOME="$(CURDIR)/.harness-preview" "$$products/harness-cli" kill-server "$$authorization"; \
 	fi
 
-preview-clean:
+preview-clean: preview-stop
 	rm -rf .harness-preview
 
 icon:

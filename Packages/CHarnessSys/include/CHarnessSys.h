@@ -2,6 +2,13 @@
 #define C_HARNESS_SYS_H
 
 #include <stddef.h>
+#ifdef __APPLE__
+// IOKit's nested message macros cannot be imported by Swift. Resolve them in C.
+unsigned int harness_power_can_sleep(void);
+unsigned int harness_power_will_sleep(void);
+unsigned int harness_power_did_wake(void);
+unsigned int harness_power_sleep_cancelled(void);
+#endif
 
 // Declarations only — no system headers here. The implementations (in shim.c) need feature macros
 // (_XOPEN_SOURCE for posix_openpt, a hand-rolled ucred for SO_PEERCRED) and the system includes that

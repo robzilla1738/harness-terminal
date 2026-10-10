@@ -1,4 +1,5 @@
 import Foundation
+import HarnessTerminalSupport
 
 /// Reads and writes `.harnesstheme` files — the disk layer behind theme export, import,
 /// and sharing. Pure Foundation (no AppKit), so it is unit-testable against a temp
@@ -14,18 +15,19 @@ public struct ThemeFileService {
     /// Write a theme document to an explicit destination URL (e.g. from a save panel).
     public func export(_ document: ThemeDocument, to url: URL) throws {
         let data = try document.encoded()
-        try data.write(to: url, options: .atomic)
+        let prior = try PrivateFile.read(url)
+        _ = try PrivateFile.replace(url, data: data, expected: prior, backup: true)
     }
 
     /// Read and validate a theme document from a `.harnesstheme` file.
     public func importTheme(from url: URL) throws -> ThemeDocument {
-        let data = try Data(contentsOf: url)
+        guard let data = try PrivateFile.read(url) else { throw ThemeDocumentError.malformed("Theme file unavailable") }
         return try ThemeDocument.decoded(from: data)
     }
 
     /// Install a theme into a directory (the user's themes folder), returning the file
-    /// URL. The filename is derived from the theme name; existing files are overwritten
-    /// so re-importing an updated theme replaces the old copy.
+    /// URL. The filename is derived from the theme name; existing files are replaced atomically with an owner-only backup
+    /// so re-importing an updated theme remains recoverable.
     @discardableResult
     public func install(_ document: ThemeDocument, into directory: URL) throws -> URL {
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)

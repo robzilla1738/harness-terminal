@@ -1,11 +1,10 @@
 import Foundation
 import AppKit
+import HarnessCore
 
 /// Installs `harness-cli` and `HarnessDaemon` into Application Support for the onboarding wizard.
 ///
-/// It is deliberately self-contained (no link to HarnessCore) but follows the same paths, plist
-/// template, and launchctl patterns as `harness-cli install` and `LaunchAgentInstaller`, so either
-/// one can take over from the other.
+/// Uses the same atomic copy and session-preserving service installer as the CLI and app.
 @MainActor
 enum BinaryInstaller {
     enum InstallError: LocalizedError {
@@ -27,7 +26,7 @@ enum BinaryInstaller {
     /// installed Harness.app. Nil when none has it.
     nonisolated static func bundledSource(named binary: String) -> URL? {
         [
-            bundledMacOSDir?.appendingPathComponent(binary),
+            Bundle.main.executableURL.map { HarnessToolLocator.companion(binary, to: $0) },
             Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent(binary),
             URL(fileURLWithPath: "/Applications/Harness.app/Contents/MacOS/\(binary)"),
         ]
@@ -59,6 +58,11 @@ enum BinaryInstaller {
         let installedBuild = resolvedProbe(HarnessCLIPaths.installedCLIPath)
         try copyReplacing(src: cliSrc, dest: HarnessCLIPaths.installedCLIPath, executable: true,
                           sourceBuild: sourceBuild, installedBuild: installedBuild)
+        let ownerSrc = HarnessToolLocator.companion("HarnessSessionHost", to: daemonSrc)
+        if FileManager.default.isExecutableFile(atPath: ownerSrc.path) {
+            try copyReplacing(src: ownerSrc, dest: BinaryRefresher.installedSessionHostPath, executable: true,
+                              sourceBuild: sourceBuild, installedBuild: installedBuild)
+        } else if daemonSource == nil { throw InstallError.missingBundledTools }
         try copyReplacing(src: daemonSrc, dest: HarnessCLIPaths.installedDaemonPath, executable: true,
                           sourceBuild: sourceBuild, installedBuild: installedBuild)
 
@@ -72,22 +76,8 @@ enum BinaryInstaller {
     /// Best-effort: the app starts a daemon on its own when launchd won't.
     nonisolated private static func installLaunchAgentIfNeeded() {
         guard !HarnessCLIPaths.hasHomeOverride else { return }
-        let plistURL = HarnessCLIPaths.launchAgentURL
-        if let existing = launchAgentDaemonPath(at: plistURL),
-           FileManager.default.isExecutableFile(atPath: existing) { return }
-
-        let home = HarnessCLIPaths.applicationSupport
-        let log = home.appendingPathComponent("logs/daemon.log")
-        try? FileManager.default.createDirectory(at: log.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-
-        if FileManager.default.fileExists(atPath: plistURL.path) {
-            _ = runLaunchctl(["bootout", "gui/\(getuid())", plistURL.path])
-        }
-        let plist = launchAgentPlist(daemonPath: HarnessCLIPaths.installedDaemonPath, harnessHome: home, logPath: log)
-        guard (try? plist.write(to: plistURL, atomically: true, encoding: .utf8)) != nil else { return }
-        _ = runLaunchctl(["bootstrap", "gui/\(getuid())", plistURL.path])
-        _ = runLaunchctl(["enable", "gui/\(getuid())/\(HarnessCLIPaths.launchAgentLabel)"])
+        _ = try? LaunchAgentInstaller.install(daemonPath: HarnessCLIPaths.installedDaemonPath,
+                                             harnessHome: HarnessCLIPaths.applicationSupport)
     }
 
     /// The daemon a LaunchAgent plist runs (its first `ProgramArguments` entry), if it parses.
@@ -194,14 +184,11 @@ enum BinaryInstaller {
                 return .keptNewerInstalled
             }
         }
-        // Stage beside the destination so a failed copy leaves the working installation intact.
-        let staging = dest.deletingLastPathComponent().appendingPathComponent(".harness-install-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: staging) }
-        try FileManager.default.copyItem(at: src, to: staging)
         if executable {
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: staging.path)
+            try BinaryRefresher.copyExecutable(from: src, to: dest)
+        } else {
+            try Data(contentsOf: src).write(to: dest, options: .atomic)
         }
-        guard rename(staging.path, dest.path) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         return .copied
     }
 
@@ -215,58 +202,7 @@ enum BinaryInstaller {
         return dataA == dataB
     }
 
-    /// The exact plist template captured from the real LaunchAgentInstaller at project creation.
-    nonisolated private static func launchAgentPlist(daemonPath: URL, harnessHome: URL, logPath: URL) -> String {
-        """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-        <dict>
-            <key>Label</key>
-            <string>\(HarnessCLIPaths.launchAgentLabel)</string>
-            <key>ProgramArguments</key>
-            <array>
-                <string>\(daemonPath.path)</string>
-            </array>
-            <key>EnvironmentVariables</key>
-            <dict>
-                <key>HARNESS_HOME</key>
-                <string>\(harnessHome.path)</string>
-            </dict>
-            <key>RunAtLoad</key>
-            <true/>
-            <key>KeepAlive</key>
-            <dict>
-                <key>SuccessfulExit</key>
-                <false/>
-                <key>Crashed</key>
-                <true/>
-            </dict>
-            <key>ProcessType</key>
-            <string>Interactive</string>
-            <key>StandardOutPath</key>
-            <string>\(logPath.path)</string>
-            <key>StandardErrorPath</key>
-            <string>\(logPath.path)</string>
-            <key>ThrottleInterval</key>
-            <integer>5</integer>
-        </dict>
-        </plist>
-        """
-    }
 
-    nonisolated private static func runLaunchctl(_ arguments: [String]) -> (status: Int32, output: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = arguments
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        do { try process.run() } catch { return (-1, "\(error)") }
-        process.waitUntilExit()
-        let data = (try? pipe.fileHandleForReading.readToEnd()) ?? Data()
-        return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
-    }
 }
 
 /// Lock-boxed pipe output so `buildNumberProbe`'s bounded read can hand bytes across queues

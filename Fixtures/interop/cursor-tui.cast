@@ -1,0 +1,6 @@
+{"version": 2, "width": 80, "height": 24, "title": "cursor synthetic agent-TUI fixture"}
+[0.0, "o", "\u001b[?1049h\u001b[2J\u001b[H\u001b[?25l\u001b[1;36mcursor — synthetic Harness interoperability fixture\u001b[0m\r\n"]
+[0.1, "o", "\u001b[2;1HReviewing fixture workspace\r\n\u001b]7501;state=working:app=cursor:progress=30\u001b\\"]
+[0.2, "o", "\u001b[3;1H\u001b[33mNeeds approval: harmless printf fixture\u001b[0m\u001b]7501;state=blocked:kind=permission:app=cursor:msg=UmV2aWV3IGhhcm1sZXNzIGZpeHR1cmUgY29tbWFuZA==\u001b\\"]
+[0.3, "o", "\u001b[3;1H\u001b[2K\u001b[32mFixture complete ✓\u001b[0m\u001b]7501;state=done:app=cursor:msg=Rml4dHVyZSBjb21wbGV0ZQ==\u001b\\"]
+[0.4, "o", "\u001b[?25h\u001b[?1049l\r\nReturned to shell\r\n"]

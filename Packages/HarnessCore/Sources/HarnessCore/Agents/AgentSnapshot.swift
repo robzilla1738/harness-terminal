@@ -27,7 +27,32 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
     case openhands
     case auggie
     case kimi
+    case devin
+    case codebuff
+    case commandCode = "command-code"
+    case qoder
+    case coderabbit
+    case bob
+    case muse
+    case antigravity
+    case junie
+    case codebuddy
+    case oz
+    case abacus = "abacus-ai"
+    case minimax = "minimax-code"
+    case trae
     case generic
+
+    /// Preserve the last public catalog for clients that have not negotiated the
+    /// expanded identities. Projection never changes the canonical observation.
+    public func projected(for capabilities: [String]) -> AgentKind {
+        if capabilities.contains(DaemonStats.agentIdentities) { return self }
+        switch self {
+        case .devin, .codebuff, .commandCode, .qoder, .coderabbit, .bob, .muse,
+             .antigravity, .junie, .codebuddy, .oz, .abacus, .minimax, .trae: return .generic
+        default: return self
+        }
+    }
 
     /// Short name used in a tab, without the marketing words.
     public var commandToken: String {
@@ -55,6 +80,20 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
         case .openhands: return "openhands"
         case .auggie: return "auggie"
         case .kimi: return "kimi"
+        case .devin: return "devin"
+        case .codebuff: return "codebuff"
+        case .commandCode: return "command-code"
+        case .qoder: return "qoder"
+        case .coderabbit: return "coderabbit"
+        case .bob: return "bob"
+        case .muse: return "muse"
+        case .antigravity: return "agy"
+        case .junie: return "junie"
+        case .codebuddy: return "codebuddy"
+        case .oz: return "oz"
+        case .abacus: return "abacusai"
+        case .minimax: return "mcode"
+        case .trae: return "traecli"
         case .generic: return "agent"
         }
     }
@@ -84,6 +123,20 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
         case .openhands: return "OpenHands"
         case .auggie: return "Auggie"
         case .kimi: return "Kimi Code"
+        case .devin: return "Devin"
+        case .codebuff: return "Codebuff"
+        case .commandCode: return "Command Code"
+        case .qoder: return "Qoder"
+        case .coderabbit: return "CodeRabbit"
+        case .bob: return "IBM Bob"
+        case .muse: return "Muse Code"
+        case .antigravity: return "Antigravity"
+        case .junie: return "Junie"
+        case .codebuddy: return "CodeBuddy"
+        case .oz: return "Warp Oz"
+        case .abacus: return "Abacus AI"
+        case .minimax: return "MiniMax Code"
+        case .trae: return "Trae Code"
         case .generic: return "Agent"
         }
     }
@@ -114,6 +167,20 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
         case .openhands: return "OH"
         case .auggie: return "AU"
         case .kimi: return "KM"
+        case .devin: return "DV"
+        case .codebuff: return "CB"
+        case .commandCode: return "CM"
+        case .qoder: return "QD"
+        case .coderabbit: return "RB"
+        case .bob: return "BB"
+        case .muse: return "MC"
+        case .antigravity: return "AV"
+        case .junie: return "JN"
+        case .codebuddy: return "BD"
+        case .oz: return "OZ"
+        case .abacus: return "AB"
+        case .minimax: return "MM"
+        case .trae: return "TR"
         case .generic: return "AG"
         }
     }
@@ -144,6 +211,20 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
         case .openhands: return "996237"
         case .auggie: return "556FA1"
         case .kimi: return "4D67B3"
+        case .devin: return "5E71A5"
+        case .codebuff: return "AB633B"
+        case .commandCode: return "687385"
+        case .qoder: return "607792"
+        case .coderabbit: return "AB643B"
+        case .bob: return "587CB5"
+        case .muse: return "647AB1"
+        case .antigravity: return "6585B1"
+        case .junie: return "67844E"
+        case .codebuddy: return "5B83AB"
+        case .oz: return "637BA0"
+        case .abacus: return "667E98"
+        case .minimax: return "9A6885"
+        case .trae: return "54866C"
         case .generic: return "9aa0a6"
         }
     }

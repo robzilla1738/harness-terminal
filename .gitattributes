@@ -14,3 +14,13 @@ Packages/CHarnessQR/qrcodegen.c linguist-vendored
 Packages/CHarnessQR/include/qrcodegen.h linguist-vendored
 Packages/CHarnessImage/stb_image.h linguist-vendored
 Apps/Harness/Sources/HarnessApp/UI/AgentIconArt.swift linguist-generated
+
+# Keep third-party SDKs and sourced brand artwork out of authored language totals.
+Vendor/** linguist-vendored
+Apps/Harness/Resources/AgentLogos/** linguist-vendored
+Apps/Harness/Sources/HarnessApp/Resources/AgentLogoNotices.txt linguist-generated
+packaging/licenses/** linguist-vendored
+
+# Preserve upstream formatting in pinned SDK sources and verbatim license texts.
+Vendor/swift-sdk/Sources/** -whitespace
+packaging/licenses/** -whitespace

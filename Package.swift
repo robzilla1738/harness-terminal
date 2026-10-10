@@ -16,7 +16,7 @@ let strictFoundationSettings: [SwiftSetting] = [.unsafeFlags(["-warnings-as-erro
 // headless on Linux — which is what lets `HarnessDaemon` run on a remote/headless box.
 #if os(macOS)
 let platformDependencies: [Package.Dependency] = [
-    // Sparkle: macOS auto-update. The only Swift package dependency, and only the GUI links it.
+    // Sparkle is linked only by the GUI.
     // Lua 5.1 is vendored in CLua51 and linked by the CLI only. Appcast hosted at thebestterminal.com.
     // Pinned to the audited 2.9.x line (`Package.resolved` locks 2.9.6): a fresh resolve can't
     // float onto an unaudited future major/minor, while patch-level security fixes still land.
@@ -36,7 +36,7 @@ let platformProducts: [Product] = [
 // single-pane `attach` — is headless.
 let cliDependencies: [Target.Dependency] = [
     "HarnessCore", "HarnessTerminalEngine", "HarnessCopyMode", "HarnessTerminalKit", "HarnessTheme",
-    "CHarnessSys", "HarnessScript", "HarnessRemoteProtocol", "CHarnessQR",
+    "CHarnessSys", "HarnessScript", "HarnessRemoteProtocol", "CHarnessQR", "HarnessMCP",
 ]
 let cliExclude: [String] = []
 let platformTargets: [Target] = [
@@ -57,10 +57,10 @@ let platformTargets: [Target] = [
         ],
         path: "Packages/HarnessTerminalKit/Sources/HarnessTerminalKit"
     ),
-    // Immersive onboarding wizard — pure SwiftUI/AppKit, no external or first-party
-    // dependencies (deliberately isolated, mirrors install paths via its own helpers).
+    // The wizard shares installation safety with the app and CLI.
     .target(
         name: "HarnessOnboarding",
+        dependencies: ["HarnessCore"],
         path: "Packages/HarnessOnboarding/Sources/HarnessOnboarding"
     ),
     .executableTarget(
@@ -146,7 +146,7 @@ let platformDependencies: [Package.Dependency] = []
 let platformProducts: [Product] = []
 let cliDependencies: [Target.Dependency] = [
     "HarnessCore", "HarnessTerminalEngine", "HarnessCopyMode", "HarnessTheme", "CHarnessSys",
-    "HarnessScript", "HarnessRemoteProtocol", "CHarnessQR",
+    "HarnessScript", "HarnessRemoteProtocol", "CHarnessQR", "HarnessMCP",
 ]
 let cliExclude: [String] = ["WindowAttachClient.swift"]
 let platformTargets: [Target] = []
@@ -172,14 +172,22 @@ let package = Package(
         // C portability shim exposed as a product so the generated Xcode project can import the
         // same first-party module that SwiftPM targets use internally.
         .library(name: "CHarnessSys", targets: ["CHarnessSys"]),
+        .library(name: "CSQLite", targets: ["CSQLite"]),
         // Lua runner. A product so the Xcode `harness-cli` target can link it.
         // The daemon does not depend on this. CLua51 stays internal.
         .library(name: "HarnessScript", targets: ["HarnessScript"]),
+        .library(name: "HarnessMCP", targets: ["HarnessMCP"]),
         .executable(name: "HarnessDaemon", targets: ["HarnessDaemon"]),
+        .executable(name: "HarnessSessionHost", targets: ["HarnessSessionHost"]),
         .executable(name: "harness-cli", targets: ["HarnessCLI"]),
     ] + platformProducts,
-    dependencies: platformDependencies,
+    dependencies: platformDependencies + [
+        .package(path: "Vendor/swift-sdk"),
+        .package(url: "https://github.com/mattt/swift-toml.git", exact: "2.0.0"),
+        .package(url: "https://github.com/apple/swift-log.git", exact: "1.6.4"),
+    ],
     targets: [
+        .systemLibrary(name: "CSQLite", path: "Packages/CSQLite", providers: [.apt(["libsqlite3-dev"])]),
         .target(name: "CHarnessQR", path: "Packages/CHarnessQR", exclude: ["README.md"]),
         .target(name: "HarnessTerminalSupport", path: "Packages/HarnessTerminalSupport/Sources/HarnessTerminalSupport"),
         .target(name: "HarnessRemoteProtocol", path: "Packages/HarnessRemoteProtocol/Sources/HarnessRemoteProtocol"),
@@ -216,6 +224,7 @@ let package = Package(
         // Native theme system — pure Swift, no external dependencies.
         .target(
             name: "HarnessTheme",
+            dependencies: ["HarnessTerminalSupport"],
             path: "Packages/HarnessTheme/Sources/HarnessTheme",
             // The community catalog is embedded as base64 in BundledThemesData.swift (compiled
             // into the binary), NOT shipped as a SwiftPM resource bundle: a missing/misplaced
@@ -256,20 +265,27 @@ let package = Package(
             name: "HarnessDaemonCore",
             // Depends on the engine so `capture-pane` reconstructs the on-screen grid
             // (faithful overwrites/clears + soft-wrap join), exactly like tmux.
-            dependencies: ["HarnessCore", "HarnessTerminalEngine", "CHarnessSys", "HarnessRemoteProtocol"],
+            dependencies: ["HarnessCore", "HarnessTerminalEngine", "CHarnessSys", "HarnessRemoteProtocol", "CSQLite"],
             path: "Packages/HarnessDaemon/Sources/HarnessDaemon"
+        ),
+        .executableTarget(
+            name: "HarnessSessionHost",
+            dependencies: ["HarnessDaemonCore", "HarnessCore"],
+            path: "Packages/HarnessDaemon/Sources/HarnessSessionHostMain"
         ),
         .executableTarget(
             name: "HarnessDaemon",
             dependencies: ["HarnessDaemonCore"],
             path: "Packages/HarnessDaemon/Sources/HarnessDaemonMain"
         ),
+        .target(name: "HarnessMCP", dependencies: ["HarnessCore", .product(name: "MCP", package: "swift-sdk"), .product(name: "Logging", package: "swift-log"), .product(name: "TOML", package: "swift-toml")], path: "Packages/HarnessMCP/Sources/HarnessMCP"),
         .executableTarget(
             name: "HarnessCLI",
             dependencies: cliDependencies,
             path: "Tools/harness/Sources/HarnessCLI",
             exclude: cliExclude
         ),
+        .testTarget(name: "HarnessMCPTests", dependencies: ["HarnessMCP", "HarnessCore"], path: "Tests/HarnessMCPTests"),
         .testTarget(
             name: "HarnessCoreTests",
             dependencies: ["HarnessCore"],

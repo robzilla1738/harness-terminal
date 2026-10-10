@@ -67,10 +67,10 @@ public enum AgentHookInstaller {
     /// TS, YAML, or JSON5).
     public static func isInstalled(agent: AgentKind, homeOverride: URL? = nil) -> Bool {
         guard let url = hookConfigURL(for: agent, homeOverride: homeOverride),
-              let data = try? Data(contentsOf: url),
+              let data = try? PrivateFile.read(url),
               let text = String(data: data, encoding: .utf8)
         else { return false }
-        return text.contains(hookMarker)
+        return isHarnessCommand(text)
     }
 
     public enum Health: String, Sendable {
@@ -84,8 +84,8 @@ public enum AgentHookInstaller {
     public static func health(agent: AgentKind, homeOverride: URL? = nil) -> Health {
         guard let strategy = strategy(for: agent), let url = hookConfigURL(for: agent, homeOverride: homeOverride) else { return .unsupported }
         guard FileManager.default.fileExists(atPath: url.path) else { return .missing }
-        guard let data = try? Data(contentsOf: url), let text = String(data: data, encoding: .utf8) else { return .unreadable }
-        guard text.contains(hookMarker) else { return .missing }
+        guard let data = try? PrivateFile.read(url), let text = String(data: data, encoding: .utf8) else { return .unreadable }
+        guard isHarnessCommand(text) else { return .missing }
         switch strategy {
         case let .eventMatcherJSON(_, payload, _), let .eventArrayJSON(_, payload, _), let .ownJSONFile(_, payload):
             guard let actual = try? JSONSerialization.jsonObject(with: data) else { return .unreadable }
@@ -105,45 +105,64 @@ public enum AgentHookInstaller {
         return (actual as? NSObject)?.isEqual(expected) == true
     }
 
-    /// Install the agent's Harness hook in its real config file (creating dirs as needed),
-    /// preserving everything else. Idempotent. Throws `InstallError.unsupported` for agents
-    /// without a hook integration.
-    @discardableResult
-    public static func install(agent: AgentKind, homeOverride: URL? = nil) throws -> InstallResult {
+    public struct ProposedInstallation: Sendable {
+        public let agent: AgentKind
+        public let path: URL
+        public let before: Data?
+        public let after: Data?
+        public let needsManualMerge: Bool
+        /// Contains only Harness's managed additions, never unrelated settings or secrets.
+        public let diff: String
+    }
+    public static func prepare(agent: AgentKind, homeOverride: URL? = nil) throws -> ProposedInstallation {
         guard let strategy = strategy(for: agent) else { throw InstallError.unsupported(agent) }
         let home = homeOverride ?? FileManager.default.homeDirectoryForCurrentUser
         let url = home.appendingPathComponent(strategy.filename)
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-
-        var backedUp: URL?
-        var replacedInvalidJSON = false
-        var needsManualMerge = false
+        let before = try PrivateFile.read(url)
+        var after: Data?, additions: String
+        var manual = false
         switch strategy {
-        case let .eventMatcherJSON(_, payload, managedEvents):
-            (backedUp, replacedInvalidJSON) = try mergeJSON(at: url, payload: payload) {
-                pruneHooks($0, events: managedEvents, isHarnessOwned: isEventMatcherEntryHarnessOwned)
-            }
-        case let .eventArrayJSON(_, payload, managedEvents):
-            (backedUp, replacedInvalidJSON) = try mergeJSON(at: url, payload: payload) {
-                pruneHooks($0, events: managedEvents, isHarnessOwned: isFlatEntryHarnessOwned)
+        case let .eventMatcherJSON(_, payload, events), let .eventArrayJSON(_, payload, events):
+            additions = String(decoding: try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]), as: UTF8.self)
+            if let before, (try? JSONSerialization.jsonObject(with: before) as? [String: Any]) == nil { manual = true }
+            else {
+                let existing = try before.map { try JSONSerialization.jsonObject(with: $0) as! [String: Any] } ?? [:]
+                let matcher: Bool
+                if case .eventMatcherJSON = strategy { matcher = true } else { matcher = false }
+                let pruned = pruneHooks(existing, events: events, isHarnessOwned: matcher ? isEventMatcherEntryHarnessOwned : isFlatEntryHarnessOwned)
+                after = try JSONSerialization.data(withJSONObject: JSONMerge.deepMerge(pruned, payload), options: [.prettyPrinted, .sortedKeys])
             }
         case let .ownJSONFile(_, payload):
-            let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
-            backedUp = try writeOwnFile(at: url, data: data)
+            after = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+            additions = String(decoding: after!, as: UTF8.self)
+            if let before, !isHarnessCommand(String(decoding: before, as: UTF8.self)) { manual = true; after = nil }
         case let .ownTextFile(_, contents):
-            backedUp = try writeOwnFile(at: url, data: Data(contents.utf8))
-        case let .regionEdit(_, body, commentToken, insertAtTop, conflictKey):
-            (backedUp, replacedInvalidJSON, needsManualMerge) = try upsertRegion(
-                at: url, commentToken: commentToken, body: body,
-                insertAtTop: insertAtTop, conflictKey: conflictKey)
+            additions = contents; after = Data(contents.utf8)
+            if let before, !isHarnessCommand(String(decoding: before, as: UTF8.self)) { manual = true; after = nil }
+        case let .regionEdit(_, body, token, top, key):
+            additions = body
+            if let before, String(data: before, encoding: .utf8) == nil { manual = true }
+            else {
+                let text = before.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                if let edited = editedRegion(text, commentToken: token, body: body, insertAtTop: top, conflictKey: key) { after = Data(edited.utf8) }
+                else { manual = true }
+            }
         }
-
-        // Don't migrate-away the old file while the new one wasn't written (manual-merge case) —
-        // the user would lose both their working hook and the orphan cleanup signal.
-        let removedLegacy = needsManualMerge ? [] : try removeLegacyHookFiles(for: agent, home: home)
-        return InstallResult(
-            path: url, backedUp: backedUp, replacedInvalidJSON: replacedInvalidJSON,
-            removedLegacy: removedLegacy, needsManualMerge: needsManualMerge)
+        let diff = "Managed configuration: " + url.path + "\n" + (manual ? "No automatic edit is safe. Merge the following Harness configuration manually.\n" : "Unrelated configuration is retained. Existing Harness entries are updated to:\n") + additions.split(separator: "\n", omittingEmptySubsequences: false).map { "+ " + $0 }.joined(separator: "\n")
+        return ProposedInstallation(agent: agent, path: url, before: before, after: after, needsManualMerge: manual, diff: diff)
+    }
+    @discardableResult
+    public static func apply(_ proposal: ProposedInstallation, homeOverride: URL? = nil) throws -> InstallResult {
+        guard let after = proposal.after, !proposal.needsManualMerge else {
+            return InstallResult(path: proposal.path, backedUp: nil, replacedInvalidJSON: false, needsManualMerge: true)
+        }
+        let backup = try PrivateFile.replace(proposal.path, data: after, expected: proposal.before)
+        let removed = try removeLegacyHookFiles(for: proposal.agent, home: homeOverride ?? FileManager.default.homeDirectoryForCurrentUser)
+        return InstallResult(path: proposal.path, backedUp: backup, replacedInvalidJSON: false, removedLegacy: removed)
+    }
+    @discardableResult
+    public static func install(agent: AgentKind, homeOverride: URL? = nil) throws -> InstallResult {
+        try apply(prepare(agent: agent, homeOverride: homeOverride), homeOverride: homeOverride)
     }
 
     /// The installable agents that look present on this machine — any of the agent's known
@@ -210,17 +229,17 @@ public enum AgentHookInstaller {
         switch agent {
         case .claudeCode:
             return .eventMatcherJSON(filename: ".claude/settings.json",
-                                     payload: claudePayload, managedEvents: ["Notification", "Stop"])
+                                     payload: claudePayload, managedEvents: claudeEvents)
         case .codex:
             // Codex reads the same event/matcher shape as Claude Code from `~/.codex/hooks.json`,
             // and hooks are enabled by default now (the old `[features] hooks = true` flag only
             // *disables* them), so we no longer touch `config.toml`.
             return .eventMatcherJSON(filename: ".codex/hooks.json",
-                                     payload: codexPayload, managedEvents: ["PermissionRequest", "Stop", "Notification"])
+                                     payload: codexPayload, managedEvents: codexEvents)
         case .cursor:
             // Real Cursor hooks: `~/.cursor/hooks.json`, `{version,hooks:{stop:[{command}]}}`.
             return .eventArrayJSON(filename: ".cursor/hooks.json",
-                                   payload: cursorPayload, managedEvents: ["stop"])
+                                   payload: cursorPayload, managedEvents: cursorEvents)
         case .grok:
             // Grok Build merges every `~/.grok/hooks/*.json`, so we own a dedicated file.
             return .ownJSONFile(filename: ".grok/hooks/harness.json", payload: grokPayload)
@@ -239,39 +258,13 @@ public enum AgentHookInstaller {
             return .regionEdit(filename: ".openclaw/openclaw.json", body: openClawHookBody,
                                commentToken: "//", insertAtTop: true, conflictKey: "hooks")
         case .aider, .gemini, .goose, .generic,
-             .copilot, .cline, .kilo, .qwen, .amp, .droid, .crush, .kiro, .vibe, .openhands, .auggie, .kimi:
+             .copilot, .cline, .kilo, .qwen, .amp, .droid, .crush, .kiro, .vibe, .openhands, .auggie, .kimi,
+             .devin, .codebuff, .commandCode, .qoder, .coderabbit, .bob, .muse, .antigravity, .junie, .codebuddy, .oz, .abacus, .minimax, .trae:
             return nil
         }
     }
 
     // MARK: - JSON merge strategies
-
-    /// Deep-merge `payload` into the JSON object at `url`, backing the file up first and running
-    /// `prune` over any existing object so re-installs converge instead of appending duplicates.
-    /// Returns whether a backup was made and whether an unparseable file was replaced.
-    private static func mergeJSON(
-        at url: URL,
-        payload: [String: Any],
-        prune: ([String: Any]) -> [String: Any]
-    ) throws -> (backedUp: URL?, replacedInvalidJSON: Bool) {
-        var merged: [String: Any] = payload
-        var backedUp: URL?
-        var replacedInvalidJSON = false
-        if FileManager.default.fileExists(atPath: url.path) {
-            // Hard `try`: if we can't back the file up, abort before touching it — never risk
-            // destroying a config we couldn't preserve first.
-            backedUp = try backUp(url)
-            if let data = try? Data(contentsOf: url),
-               let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                merged = JSONMerge.deepMerge(prune(existing), payload)
-            } else {
-                replacedInvalidJSON = true
-            }
-        }
-        let data = try JSONSerialization.data(withJSONObject: merged, options: [.prettyPrinted, .sortedKeys])
-        try data.write(to: url, options: .atomic)
-        return (backedUp, replacedInvalidJSON)
-    }
 
     /// Drop the Harness-owned entries (per `isHarnessOwned`) from the `hooks[event]` arrays we
     /// manage, removing any event left empty. Everything else — other keys, other events, and the
@@ -286,9 +279,18 @@ public enum AgentHookInstaller {
         guard !events.isEmpty, var hooks = config["hooks"] as? [String: Any] else { return config }
         for event in events {
             guard let entries = hooks[event] as? [Any] else { continue }
-            let kept = entries.filter { entry in
-                guard let entry = entry as? [String: Any] else { return true } // unknown shape — keep
-                return !isHarnessOwned(entry)
+            let kept = entries.compactMap { value -> Any? in
+                guard var entry = value as? [String: Any] else { return value }
+                guard isHarnessOwned(entry) else { return value }
+                if let commands = entry["hooks"] as? [Any] {
+                    let unrelated = commands.filter { command in
+                        guard let text = (command as? [String: Any])?["command"] as? String else { return true }
+                        return !isHarnessCommand(text)
+                    }
+                    guard !unrelated.isEmpty else { return nil }
+                    entry["hooks"] = unrelated; return entry
+                }
+                return nil
             }
             if kept.isEmpty { hooks.removeValue(forKey: event) } else { hooks[event] = kept }
         }
@@ -303,27 +305,16 @@ public enum AgentHookInstaller {
         guard let commands = entry["hooks"] as? [Any] else { return false }
         return commands.contains { command in
             guard let text = (command as? [String: Any])?["command"] as? String else { return false }
-            return text.contains(hookMarker)
+            return isHarnessCommand(text)
         }
     }
 
     /// Flat shape (Cursor): Harness-owned if the entry's own `command` contains the marker.
     private static func isFlatEntryHarnessOwned(_ entry: [String: Any]) -> Bool {
-        (entry["command"] as? String)?.contains(hookMarker) ?? false
+        (entry["command"] as? String).map(isHarnessCommand) ?? false
     }
 
     // MARK: - Own-file & text-region strategies
-
-    /// Overwrite a Harness-owned file (e.g. `harness.json`/`harness.js`/`harness.ts`) atomically,
-    /// backing up any pre-existing copy first. Idempotent: we own the whole file.
-    private static func writeOwnFile(at url: URL, data: Data) throws -> URL? {
-        var backedUp: URL?
-        if FileManager.default.fileExists(atPath: url.path) {
-            backedUp = try backUp(url)
-        }
-        try data.write(to: url, options: .atomic)
-        return backedUp
-    }
 
     /// Upsert a sentinel-delimited managed region into a text config we don't own, backing it up
     /// first. On reinstall the existing region is replaced in place (idempotent); on first install
@@ -335,24 +326,13 @@ public enum AgentHookInstaller {
     /// would corrupt it), exactly one sentinel survives (a torn region we can't locate), or a
     /// JSON5 file has no balanced root object to insert into. `replacedInvalidJSON` is surfaced
     /// when an existing file couldn't be read as text (its bytes are preserved in the backup).
-    private static func upsertRegion(
-        at url: URL, commentToken: String, body: String, insertAtTop: Bool, conflictKey: String
-    ) throws -> (backedUp: URL?, replacedInvalidJSON: Bool, needsManualMerge: Bool) {
+    private static func editedRegion(
+        _ text: String, commentToken: String, body: String, insertAtTop: Bool, conflictKey: String
+    ) -> String? {
         let begin = "\(commentToken) >>> harness-managed (do not edit) >>>"
         let end = "\(commentToken) <<< harness-managed <<<"
         let region = "\(begin)\n\(body)\n\(end)"
-
-        let exists = FileManager.default.fileExists(atPath: url.path)
-        var replacedInvalid = false
-        var text = ""
-        if exists {
-            if let s = try? String(contentsOf: url, encoding: .utf8) {
-                text = s
-            } else {
-                replacedInvalid = true // unreadable as text — we'll write fresh; bytes kept in backup
-            }
-        }
-
+        guard text.components(separatedBy: begin).count <= 2, text.components(separatedBy: end).count <= 2 else { return nil }
         let beginRange = text.range(of: begin)
         let endRange = text.range(of: end)
 
@@ -362,10 +342,10 @@ public enum AgentHookInstaller {
             result.replaceSubrange(b.lowerBound..<e.upperBound, with: region)
         } else if (beginRange == nil) != (endRange == nil) {
             // Exactly one sentinel present — a torn region we can't safely locate. Don't guess.
-            return (nil, false, true)
-        } else if !replacedInvalid, definesKey(conflictKey, in: text, insertAtTop: insertAtTop) {
+            return nil
+        } else if definesKey(conflictKey, in: text, insertAtTop: insertAtTop) {
             // The config already defines our key — a second one would corrupt it. Leave it alone.
-            return (nil, false, true)
+            return nil
         } else if insertAtTop {
             // `result` still equals `text` here, so the index is valid for `result`.
             if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -374,7 +354,7 @@ public enum AgentHookInstaller {
                 result.insert(contentsOf: "\n\(region)\n", at: result.index(after: brace))
             } else {
                 // Non-empty but no balanced root object to insert into — don't risk corrupting it.
-                return (nil, false, true)
+                return nil
             }
         } else {
             // YAML: append the region at end-of-file (multiple top-level keys are valid).
@@ -382,9 +362,7 @@ public enum AgentHookInstaller {
             result += "\(region)\n"
         }
 
-        let backedUp = exists ? try backUp(url) : nil
-        try result.write(to: url, atomically: true, encoding: .utf8)
-        return (backedUp, replacedInvalid, false)
+        return result
     }
 
     /// True if `text` defines top-level `key` outside any Harness region. For JSON5 we accept a
@@ -469,7 +447,7 @@ public enum AgentHookInstaller {
         for url in legacyHookFiles(for: agent, home: home) {
             guard FileManager.default.fileExists(atPath: url.path),
                   let text = try? String(contentsOf: url, encoding: .utf8),
-                  text.contains(hookMarker)
+                  isHarnessCommand(text)
             else { continue } // absent or a user file — leave it alone
             // Never delete without a recoverable backup. If the backup fails, keep the orphan.
             guard (try? backUp(url)) != nil else { continue }
@@ -489,14 +467,17 @@ public enum AgentHookInstaller {
     private static func backUp(_ url: URL) throws -> URL {
         let stamp = Int(Date().timeIntervalSince1970 * 1000)
         let backup = url.appendingPathExtension("harness-bak-\(stamp)-\(UUID().uuidString.prefix(8))")
-        try FileManager.default.copyItem(at: url, to: backup)
+        guard let data = try PrivateFile.read(url) else { throw PrivateFile.Failure.unavailable }
+        try PrivateFile.replace(backup, data: data, expected: nil, backup: false)
         return backup
     }
 
     // MARK: - Hook commands
 
     /// Substring present in every Harness hook command — the `isInstalled` marker.
-    private static let hookMarker = "harness-cli notify"
+    private static func isHarnessCommand(_ text: String) -> Bool {
+        text.contains("harness-cli notify") || text.contains("harness-cli agent-hook")
+    }
     /// Shell-expandable PATH prefix so hooks find `harness-cli` even under an agent's minimal
     /// PATH. Platform-specific: macOS installs under `~/Library/Application Support/Harness/bin`;
     /// Linux follows the XDG base-dir spec (mirrors `HarnessPaths.applicationSupport`), expanded
@@ -531,56 +512,30 @@ public enum AgentHookInstaller {
         }
     }
 
-    /// A notify command whose body comes from the hook's stdin JSON `message` (`--from-hook`).
-    /// Used for agents (Claude Code) that pass the notification text on stdin rather than as a
-    /// shell argument — `--body "$HARNESS_NOTIFY_MESSAGE"` would expand to nothing.
-    private static func notifyFromHookCommand(title: String, app: String) -> String {
-        "\(notifyPrefix) --surface \"$HARNESS_SURFACE\" --title \"\(title)\" --from-hook ; \(programStatusEcho(state: "blocked", app: app, message: "Needs you", kind: "question"))"
-    }
-
     // MARK: - Per-agent payloads
 
-    private static var claudePayload: [String: Any] {
-        [
-            "hooks": [
-                "Notification": [[
-                    "matcher": "*",
-                    "hooks": [["type": "command", "command": notifyFromHookCommand(title: "Claude Code", app: "claude-code")]],
-                ]],
-                "Stop": [[
-                    "matcher": "*",
-                    "hooks": [["type": "command", "command": notifyCommand(title: "Claude Code", body: "Done", app: "claude-code")]],
-                ]],
-            ],
-        ]
+    private static let claudeEvents = ["SessionStart", "SessionEnd", "UserPromptSubmit", "Notification", "PermissionRequest", "PreToolUse", "PostToolUse", "PostToolUseFailure", "SubagentStart", "SubagentStop", "Stop", "StopFailure"]
+    private static let codexEvents = ["SessionStart", "SessionEnd", "UserPromptSubmit", "Notification", "PermissionRequest", "PreToolUse", "PostToolUse", "SubagentStart", "SubagentStop", "Stop"]
+    private static let cursorEvents = ["sessionStart", "sessionEnd", "beforeSubmitPrompt", "preToolUse", "postToolUse", "subagentStart", "subagentStop", "stop"]
+    private static func captureCommand(_ contract: HookContract) -> String {
+        notifyPrefix.replacingOccurrences(of: "harness-cli notify", with: "harness-cli agent-hook") + " --contract " + contract.rawValue
     }
-
-    private static var codexPayload: [String: Any] {
-        [
-            "hooks": [
-                "PermissionRequest": [[
-                    "matcher": "*",
-                    "hooks": [["type": "command", "command": notifyCommand(title: "Codex", body: "Awaiting input", app: "codex")]],
-                ]],
-                "Notification": [[
-                    "matcher": "*",
-                    "hooks": [["type": "command", "command": notifyCommand(title: "Codex", body: "Notification", app: "codex")]],
-                ]],
-                "Stop": [[
-                    "matcher": "*",
-                    "hooks": [["type": "command", "command": notifyCommand(title: "Codex", body: "Done", app: "codex")]],
-                ]],
-            ],
-        ]
+    private static func matcherCapturePayload(events: [String], contract: HookContract) -> [String: Any] {
+        var hooks: [String: Any] = [:]
+        for event in events {
+            var handler: [String: Any] = ["type": "command", "command": captureCommand(contract), "timeout": 1]
+            if event != "SessionEnd" { handler["async"] = true }
+            hooks[event] = [["hooks": [handler]]]
+        }
+        return ["hooks": hooks]
     }
-
+    private static var claudePayload: [String: Any] { matcherCapturePayload(events: claudeEvents, contract: .claude202610) }
+    private static var codexPayload: [String: Any] { matcherCapturePayload(events: codexEvents, contract: .codex202610) }
     private static var cursorPayload: [String: Any] {
-        [
-            "version": 1,
-            "hooks": [
-                "stop": [["command": notifyCommand(title: "Cursor", body: "Done", app: "cursor")]],
-            ],
-        ]
+        // Cursor has no documented async-handler option. Preserve stdin explicitly
+        // and pass the provider parent's PID before the helper shell returns.
+        let command = captureCommand(.cursorV1) + " --sender-pid \"$PPID\" <&0 >/dev/null 2>&1 &"
+        return ["version": 1, "hooks": Dictionary(uniqueKeysWithValues: cursorEvents.map { ($0, [["command": command]]) })]
     }
 
     private static var grokPayload: [String: Any] {

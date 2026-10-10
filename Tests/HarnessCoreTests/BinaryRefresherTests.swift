@@ -2,6 +2,73 @@ import XCTest
 @testable import HarnessCore
 
 final class BinaryRefresherTests: XCTestCase {
+    #if os(macOS)
+    func testHelperInstallPreservesBundleAndRejectsDamagedReplacement() throws {
+        let dir = try makeDir()
+        let bundle = dir.appendingPathComponent("source/HarnessDaemon.app")
+        let executable = bundle.appendingPathComponent("Contents/MacOS/HarnessDaemon")
+        try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: "/usr/bin/true"), to: executable)
+        let metadata: [String: String] = ["CFBundleExecutable": "HarnessDaemon", "CFBundleIdentifier": "com.robert.harness.fixture.daemon", "CFBundlePackageType": "APPL"]
+        try PropertyListSerialization.data(fromPropertyList: metadata, format: .xml, options: 0).write(to: bundle.appendingPathComponent("Contents/Info.plist"))
+        // Opaque fixture proves that installation retains the whole bundle; it
+        // does not claim to authorize Keychain access or validate an Apple profile.
+        let profile = Data("opaque profile fixture".utf8)
+        try profile.write(to: bundle.appendingPathComponent("Contents/embedded.provisionprofile"))
+        let signing = Process(); signing.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        signing.arguments = ["--force", "--sign", "-", bundle.path]
+        signing.standardError = FileHandle.nullDevice
+        try signing.run(); signing.waitUntilExit(); XCTAssertEqual(signing.terminationStatus, 0)
+        let bin = dir.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let destination = bin.appendingPathComponent("HarnessDaemon")
+        try write("previous executable", to: destination)
+        try BinaryRefresher.copyExecutable(from: executable, to: destination)
+        let installed = try XCTUnwrap(BinaryRefresher.ownedHelperBundle(forInstalledExecutable: destination))
+        XCTAssertEqual(try Data(contentsOf: installed.appendingPathComponent("Contents/embedded.provisionprofile")), profile)
+        XCTAssertEqual(HarnessToolLocator.companion("HarnessSessionHost", to: destination), bin.appendingPathComponent(".tool-bundles/HarnessSessionHost.app/Contents/MacOS/HarnessSessionHost"))
+        let running = Process(); running.executableURL = destination
+        try running.run(); running.waitUntilExit(); XCTAssertEqual(running.terminationStatus, 0)
+        var original = try Data(contentsOf: destination)
+        XCTAssertFalse(try BinaryRefresher.refreshIfChanged(source: executable, destination: destination))
+        let renewedProfile = Data("renewed opaque profile fixture".utf8)
+        try renewedProfile.write(to: bundle.appendingPathComponent("Contents/embedded.provisionprofile"))
+        let renewal = Process(); renewal.executableURL = signing.executableURL; renewal.arguments = signing.arguments
+        renewal.standardError = FileHandle.nullDevice
+        try renewal.run(); renewal.waitUntilExit(); XCTAssertEqual(renewal.terminationStatus, 0)
+        XCTAssertTrue(try BinaryRefresher.refreshIfChanged(source: executable, destination: destination), "a renewed signed profile updates the complete bundle")
+        XCTAssertEqual(try Data(contentsOf: installed.appendingPathComponent("Contents/embedded.provisionprofile")), renewedProfile)
+        original = try Data(contentsOf: destination)
+        try Data("damaged profile with unchanged executable".utf8).write(to: bundle.appendingPathComponent("Contents/embedded.provisionprofile"))
+        XCTAssertThrowsError(try BinaryRefresher.refreshIfChanged(source: executable, destination: destination), "resource-only differences must be checked even when executable bytes match")
+        XCTAssertEqual(try Data(contentsOf: destination), original)
+        try renewedProfile.write(to: bundle.appendingPathComponent("Contents/embedded.provisionprofile"))
+        try FileManager.default.removeItem(at: destination)
+        try BinaryRefresher.copyExecutable(from: installed.appendingPathComponent("Contents/MacOS/HarnessDaemon"), to: destination)
+        XCTAssertEqual(try Data(contentsOf: destination), original, "reinstall repairs the stable public alias")
+        try FileManager.default.removeItem(at: destination)
+        try FileManager.default.createSymbolicLink(atPath: destination.path, withDestinationPath: "/usr/bin/true")
+        XCTAssertThrowsError(try BinaryRefresher.copyExecutable(from: executable, to: destination))
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: destination.path), "/usr/bin/true", "an unrelated alias is preserved")
+        try FileManager.default.removeItem(at: destination)
+        try FileManager.default.createSymbolicLink(atPath: destination.path, withDestinationPath: ".tool-bundles/HarnessDaemon.app/Contents/MacOS/HarnessDaemon")
+        try write("damaged replacement", to: executable)
+        XCTAssertThrowsError(try BinaryRefresher.copyExecutable(from: executable, to: destination))
+        XCTAssertEqual(try Data(contentsOf: destination), original)
+        XCTAssertEqual(try Data(contentsOf: installed.appendingPathComponent("Contents/embedded.provisionprofile")), renewedProfile)
+    }
+    #endif
+
+    func testFailedCopyPreservesInstalledBinary() throws {
+        let dir = try makeDir()
+        let destination = dir.appendingPathComponent("installed")
+        try write("working executable", to: destination)
+        let original = try inode(destination)
+        XCTAssertThrowsError(try BinaryRefresher.copyExecutable(from: dir.appendingPathComponent("missing"), to: destination))
+        XCTAssertEqual(try inode(destination), original)
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "working executable")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path), ["installed"])
+    }
     private func makeDir() throws -> URL {
         let url = URL(fileURLWithPath: "/tmp", isDirectory: true)
             .appendingPathComponent("hbr-\(UUID().uuidString.prefix(8))", isDirectory: true)
@@ -39,7 +106,7 @@ final class BinaryRefresherTests: XCTestCase {
         XCTAssertTrue(try BinaryRefresher.refreshIfChanged(source: source, destination: dest))
         XCTAssertEqual(try String(contentsOf: dest, encoding: .utf8), "new daemon")
         XCTAssertEqual(try mode(dest), 0o755)
-        // Remove-then-copy must land on a fresh inode: the kernel caches code signatures by
+        // Atomic replacement must land on a fresh inode: the kernel caches code signatures by
         // vnode, so overwriting in place gets the next daemon launch killed (OS_REASON_CODESIGNING).
         XCTAssertNotEqual(try inode(dest), try inode(keeper),
                           "refresh must replace the inode, not overwrite in place")

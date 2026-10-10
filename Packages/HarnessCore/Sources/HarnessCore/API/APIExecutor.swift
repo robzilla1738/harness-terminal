@@ -23,17 +23,46 @@ public enum APIExecutor {
         method: String,
         arguments: [String: APIArgument],
         client: DaemonClient,
-        environment: APIEnvironment = APIEnvironment()
+        environment: APIEnvironment = APIEnvironment(),
+        exposure: APIExposure = .cli,
+        allowWrite: Bool = true,
+        protectedSurfaceID: String? = nil,
+        mutationAudit: (@Sendable (String, String?) -> Void)? = nil
     ) -> APIResult {
         do {
-            guard case let .snapshot(snapshot) = try client.request(.getSnapshot) else {
+            guard let definition = HarnessAPI.method(named: method) else {
+                return .failed("Unknown method: \(method)", code: .badArguments)
+            }
+            guard definition.access.exposures.contains(exposure) else {
+                return .failed("\(method) is unavailable through \(exposure.rawValue)", code: .badArguments)
+            }
+            guard allowWrite || definition.access.effect == .read else {
+                return .failed("\(method) requires explicit write access", code: .badArguments)
+            }
+            if !definition.access.capabilities.isEmpty {
+                guard case let .daemonStats(stats) = try client.request(.daemonStats),
+                      definition.access.capabilities.isSubset(of: Set(stats.capabilities ?? [])) else {
+                    return .failed("\(method) requires a newer session service; your shells are preserved. Adopt the update before using this feature.", code: .badArguments)
+                }
+            }
+            guard case let .snapshot(snapshot) = try client.requestForCurrentClient(.getSnapshot) else {
                 return .failed("HarnessDaemon sent no snapshot", code: .failed)
             }
             var clients: [ClientSummary] = []
             if case let .clients(rows) = try client.request(.listClients) { clients = rows }
             let catalog = HarnessAPI.catalog(snapshot: snapshot, clients: clients)
+            try Task.checkCancellation()
+            if exposure == .mcp, definition.access.effect == .write {
+                let canonical = try APITargets(catalog: catalog, environment: environment).pane(arguments["pane"]?.string)
+                guard canonical.surfaceID != protectedSurfaceID else {
+                    return .failed("MCP writes to the caller's own pane are refused after canonical target resolution", code: .badArguments)
+                }
+                mutationAudit?(method, canonical.surfaceID)
+            }
             let plan = HarnessAPI.plan(method: method, arguments: arguments, catalog: catalog, environment: environment)
             return try perform(plan, snapshot: snapshot, client: client, environment: environment)
+        } catch is CancellationError {
+            return .failed("Request cancelled", code: .interrupted)
         } catch DaemonClientError.connectionFailed, DaemonClientError.writeFailed, EndpointError.connectionFailed {
             return .failed("HarnessDaemon is not reachable", code: .unreachable)
         } catch let failure as CommandRunner.Failure {
@@ -90,9 +119,12 @@ public enum APIExecutor {
             try CommandRunner.run(source, client: client, focusSurface: environment.surface)
             return .ok(try encode(["ok": true]))
         case let .request(request):
-            return try reply(client.request(request, timeout: 10))
+            return try reply(client.requestForCurrentClient(request, timeout: 10))
         case let .query(request):
-            let response = try client.request(request, timeout: 10)
+            let timeout: TimeInterval
+            if case let .activity(.worktrees(_, operation)) = request { timeout = operation.requestTimeout }
+            else if case let .activity(.fanout(_, operation)) = request { timeout = operation.requestTimeout } else { timeout = 10 }
+            let response = try client.requestForCurrentClient(request, timeout: timeout)
             guard case let .text(text) = response else { return try reply(response) }
             return .ok(text)
         case let .sendKey(surfaceID, keys, hex):
@@ -138,10 +170,13 @@ public enum APIExecutor {
     /// size, program status, and process tree.
     private static func paneView(_ surfaceID: String, snapshot: SessionSnapshot, client: DaemonClient) throws -> String {
         var view: [String: Any] = ["surface": surfaceID]
+        var terminal = true
         for session in snapshot.workspaces.flatMap(\.sessions) {
             for tab in session.tabs {
                 guard let leaf = tab.rootPane.allLeaves().first(where: { $0.surfaceID.uuidString == surfaceID }) else { continue }
                 let identity = PaneIdentity.of(leaf: leaf, in: tab)
+                terminal = leaf.paneContent.isTerminal
+                view["content"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(leaf.paneContent))
                 view["pane"] = leaf.id.uuidString
                 view["tab"] = tab.id.uuidString
                 view["session"] = session.id.uuidString
@@ -154,7 +189,7 @@ public enum APIExecutor {
             ("size", IPCRequest.paneQuery(surfaceID: surfaceID, kind: "size")),
             ("status", IPCRequest.paneQuery(surfaceID: surfaceID, kind: "program_status")),
             ("process", IPCRequest.processTree(surfaceID: surfaceID)),
-        ] {
+        ] where terminal {
             if case let .text(text) = try client.request(request, timeout: 5),
                let value = try? JSONSerialization.jsonObject(with: Data(text.utf8), options: [.fragmentsAllowed]) {
                 view[key] = value

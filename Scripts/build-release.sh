@@ -28,6 +28,8 @@ swift build -c release --product Harness $CMO_FLAGS
 # shellcheck disable=SC2086
 swift build -c release --product HarnessDaemon $CMO_FLAGS
 # shellcheck disable=SC2086
+swift build -c release --product HarnessSessionHost $CMO_FLAGS
+# shellcheck disable=SC2086
 swift build -c release --product harness-cli $CMO_FLAGS
 
 echo "Packaging Harness.app..."

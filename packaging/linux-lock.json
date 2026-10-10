@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "swift_version": "6.0.3",
+  "sqlite_development_version": "3.37.2-2ubuntu0.8",
+  "runtime_baseline": "Ubuntu 22.04, glibc 2.35, declared distribution libraries; no Swift installation required",
+  "architectures": {
+    "x86_64": {
+      "platform": "linux/amd64",
+      "builder": "swift@sha256:29ccdc91749b497bfdd0d12b7d5822dc6e2c15730eb66fef3c8b83f1a90308dd",
+      "runtime": "ubuntu@sha256:08ea48a03a3e78ebc7cd526e6a275053223aadd88bfc09cc49b06d5281525fde"
+    },
+    "arm64": {
+      "platform": "linux/arm64",
+      "builder": "swift@sha256:c1b99c5190a57191a823d25469469f023c67f5950c4c052c9b1aa818076cc22f",
+      "runtime": "ubuntu@sha256:30dfd7fe96f97c5f5ddf388ce8d098aa509644ad68fdef67244fb71b8169ffcb"
+    }
+  },
+  "build_jobs": 6
+}

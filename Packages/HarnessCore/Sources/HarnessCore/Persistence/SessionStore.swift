@@ -4,6 +4,8 @@ import Foundation
 public final class SessionStore: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.robert.harness.session-store")
     private var pendingSave: DispatchWorkItem?
+    private var pendingSnapshot: (snapshot: SessionSnapshot, url: URL)?
+    private var writtenSnapshot: (revision: Int, url: URL)?
     private let debounceInterval: TimeInterval = 0.5
 
     private let onSaveError: @Sendable (String) -> Void
@@ -59,19 +61,25 @@ public final class SessionStore: @unchecked Sendable {
         try queue.sync {
             pendingSave?.cancel()
             pendingSave = nil
+            var latest = snapshot
+            if let pendingSnapshot, pendingSnapshot.url == HarnessPaths.snapshotURL, pendingSnapshot.snapshot.revision > latest.revision { latest = pendingSnapshot.snapshot }
+            pendingSnapshot = nil
             // Synchronous and env-authoritative — used at init (first write) and on graceful
             // shutdown (flush the last debounce window). `ensureDirectories` materializes the full
             // owner-only tree (sessions/scrollback/logs); `writeSnapshot` then writes the layout.
             try HarnessPaths.ensureDirectories()
-            try writeSnapshot(snapshot, to: HarnessPaths.snapshotURL)
+            try writeSnapshot(latest, to: HarnessPaths.snapshotURL)
         }
     }
 
     private func scheduleSave(_ snapshot: SessionSnapshot, to url: URL) {
+        if let writtenSnapshot, writtenSnapshot.url == url, writtenSnapshot.revision > snapshot.revision { return }
+        if let pendingSnapshot, pendingSnapshot.url == url, pendingSnapshot.snapshot.revision > snapshot.revision { return }
+        pendingSnapshot = (snapshot, url)
         pendingSave?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            self.pendingSave = nil
+            self.pendingSave = nil; self.pendingSnapshot = nil
             do {
                 try self.writeSnapshot(snapshot, to: url)
                 if self.lastSaveError != nil { self.onSaveRecovery() }
@@ -87,6 +95,7 @@ public final class SessionStore: @unchecked Sendable {
     }
 
     private func writeSnapshot(_ snapshot: SessionSnapshot, to url: URL) throws {
+        if let writtenSnapshot, writtenSnapshot.url == url, writtenSnapshot.revision > snapshot.revision { return }
         // Ensure the destination directory exists from the PINNED url (never re-reading
         // `HARNESS_HOME`, which a debounced write firing after a test's tearDown would otherwise
         // resolve to the real home). Owner-only, matching `HarnessPaths.ensureDirectories`.
@@ -95,6 +104,7 @@ public final class SessionStore: @unchecked Sendable {
             attributes: [.posixPermissions: 0o700])
         var copy = snapshot
         copy.savedAt = .now
+        copy.activityError = nil
         copy.persistenceError = nil // Runtime health must not become stale persisted state.
         let encoder = JSONEncoder()
         // Compact (not prettyPrinted) — layout.json is machine-written/read, not hand-edited, and
@@ -104,5 +114,6 @@ public final class SessionStore: @unchecked Sendable {
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(copy)
         try data.write(to: url, options: .atomic)
+        writtenSnapshot = (snapshot.revision, url)
     }
 }

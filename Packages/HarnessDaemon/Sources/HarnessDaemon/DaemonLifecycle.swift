@@ -41,9 +41,9 @@ public enum DaemonLifecycle {
         // Our own PID in the file (re-exec / same process) is never a competing instance.
         if priorPID == ownPID { return .proceed }
         guard isAlive(priorPID) else { return .stale }
-        guard let path = executablePath(priorPID),
-              URL(fileURLWithPath: path).lastPathComponent == "HarnessDaemon"
-        else {
+        guard let path = executablePath(priorPID) else { return .refuse }
+        let name = URL(fileURLWithPath: path).lastPathComponent
+        guard name == "HarnessDaemon" || name == "HarnessSessionHost" else {
             // Alive, but not our daemon — a recycled PID, or a binary whose name only
             // contains "HarnessDaemon" as a substring (e.g. "HarnessDaemon-old"). Exact
             // basename comparison prevents both false positives from recycled PIDs and
@@ -66,19 +66,7 @@ public enum DaemonLifecycle {
     /// The absolute path of the executable backing `pid`, or nil if it can't be resolved
     /// (dead, or not permitted). Mirrors `AgentDetector.pidPath`.
     public static func executablePath(of pid: pid_t) -> String? {
-        #if canImport(Darwin)
-        var buffer = [UInt8](repeating: 0, count: Int(MAXPATHLEN))
-        let length = buffer.withUnsafeMutableBufferPointer { ptr -> Int32 in
-            proc_pidpath(pid, ptr.baseAddress, UInt32(MAXPATHLEN))
-        }
-        guard length > 0 else { return nil }
-        return String(decoding: buffer.prefix(Int(length)), as: UTF8.self)
-        #else
-        var buffer = [CChar](repeating: 0, count: 4096)
-        let len = readlink("/proc/\(pid)/exe", &buffer, buffer.count - 1)
-        guard len > 0 else { return nil }
-        return String(decoding: buffer[0 ..< len].map { UInt8(bitPattern: $0) }, as: UTF8.self)
-        #endif
+        DaemonOwnership.executablePath(pid: pid)
     }
 
     /// Remove a PID file **only if we own it** — its trimmed contents equal `ownPID`. Guards the

@@ -92,6 +92,10 @@ final class AgentDetectorTests: XCTestCase {
             (.copilot, "copilot"), (.cline, "cline"), (.kilo, "kilo"), (.qwen, "qwen"),
             (.amp, "amp"), (.droid, "droid"), (.crush, "crush"), (.kiro, "kiro-cli"),
             (.vibe, "vibe"), (.openhands, "openhands"), (.auggie, "auggie"), (.kimi, "kimi"),
+            (.devin, "devin"), (.codebuff, "codebuff"), (.commandCode, "command-code"),
+            (.qoder, "qoder"), (.coderabbit, "coderabbit"), (.bob, "bob"), (.muse, "muse"),
+            (.antigravity, "agy"), (.junie, "junie"), (.codebuddy, "codebuddy"), (.oz, "oz"),
+            (.abacus, "abacusai"), (.minimax, "mcode"), (.trae, "traecli"),
         ]
         for (kind, executable) in tools {
             let entry = try XCTUnwrap(AgentTable.default.entries.first { $0.kind == kind })
@@ -104,6 +108,35 @@ final class AgentDetectorTests: XCTestCase {
         XCTAssertFalse(qwen.matchesProcess(resolvedExecutable: "/usr/bin/cat", arguments: ["cat", "/opt/lib/node_modules/@qwen-code/qwen-code/cli-entry.js"]))
         XCTAssertNil(AgentTitleInference.kind(from: "GitHub issue notes"))
         XCTAssertEqual(AgentTitleInference.kind(from: "GitHub Copilot — project"), .copilot)
+    }
+
+    func testScreenshotCLILaunchersAndVersionedMusePreserveDetectionBoundaries() throws {
+        let packages: [(AgentKind, String)] = [
+            (.abacus, "@abacus-ai/cli/scripts/npm-wrapper/shim.cjs"),
+            (.minimax, "@minimax-ai/code/cli.js"),
+            (.codebuff, "codebuff/index.js"), (.commandCode, "command-code/dist/index.mjs"),
+            (.codebuddy, "@tencent-ai/codebuddy-code/bin/codebuddy"),
+            (.qoder, "@qoder-ai/qodercli/bundle/qoder-npm-dispatcher.cjs"),
+        ]
+        for (kind, package) in packages {
+            let entry = try XCTUnwrap(AgentTable.default.entries.first { $0.kind == kind })
+            let path = "/opt/lib/node_modules/" + package
+            XCTAssertTrue(entry.matchesProcess(resolvedExecutable: "/opt/bin/node", arguments: ["node", path]))
+            XCTAssertFalse(entry.matchesProcess(resolvedExecutable: "/usr/bin/cat", arguments: ["cat", path]))
+            if kind != .codebuddy {
+                XCTAssertFalse(entry.matchesProcess(resolvedExecutable: "/opt/bin/node", arguments: ["node", "/project/" + package]))
+            }
+            XCTAssertFalse(entry.matchesProcess(resolvedExecutable: "/opt/bin/node", arguments: ["node", "/project/index.js", path]))
+            XCTAssertFalse(AgentHookInstaller.canInstall(kind))
+        }
+        let muse = try XCTUnwrap(AgentTable.default.entries.first { $0.kind == .muse })
+        XCTAssertTrue(muse.matchesProcess(resolvedExecutable: "/Users/me/.local/bin/muse-bin-1.2.3-R4.5", arguments: ["muse-bin-1.2.3-R4.5"]))
+        XCTAssertFalse(muse.matchesProcess(resolvedExecutable: "/usr/bin/vim", arguments: ["vim", "muse-bin-1.2.3-R4.5"]))
+        XCTAssertFalse(muse.matchesProcess(resolvedExecutable: "/tmp/muse-bin-notes", arguments: ["muse-bin-notes"]))
+        XCTAssertNil(AgentTitleInference.kind(from: "command-codebase"))
+        XCTAssertEqual(AgentTitleInference.kind(from: "Muse Code — project"), .muse)
+        XCTAssertFalse(AgentTable.default.entries.contains { $0.matches(executable: "antigravity") })
+        XCTAssertEqual(Set(AgentTable.default.entries.map(\.kind)), Set(AgentKind.allCases.filter { $0 != .generic }))
     }
 
     func testDefaultTableResolvesOpenCodeExecutable() throws {

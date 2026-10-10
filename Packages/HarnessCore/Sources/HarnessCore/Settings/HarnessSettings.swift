@@ -337,6 +337,11 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     public var triggers: [TriggerRule]
     /// A tunneled client may drive GUI actions only while this is on. Local clients always may.
     public var remoteControl: Bool
+    public var notificationPolicy: NotificationPolicySettings?
+    public var power: PowerSettings
+    public var worktrees: WorktreeSettings
+    public var activity: ActivitySettings
+    public var aiSummaries: AISettings
 
     /// Whether the *umbrella* Harness controls are on (prefix or status line). Kept for onboarding
     /// copy and tests; the prefix and status line each resolve independently via the effective
@@ -367,6 +372,23 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case fontSize, fontFamily, defaultShell, defaultCWD, transparentTitlebar, sidebarVisible
+        case showMachineIndicator, restoreWindowSize, backgroundOpacity, backgroundBlur, windowPaddingX, windowPaddingY
+        case appearanceMode, systemLightThemeName, systemDarkThemeName, customBackgroundHex, customForegroundHex, customCursorHex
+        case importedConfigSignature, prefixKey, scrollbackLines, cursorStyle, cursorBlink, copyOnSelect
+        case selectionBackgroundHex, selectionForegroundHex, boldColorHex, cursorTextHex, paletteHex, agentColorOverrides
+        case paletteShortcuts, dividerHex, statusLineHex, windowBorderHex, windowBorderOpacity, systemNotificationsEnabled
+        case vividColors, colorRendering, linearBlending, textRendering
+        case notificationSoundEnabled, colorGamut, applyThemeToTerminalOutput, ligatures, offMainParserFramePipeline, liveResizeReflow
+        case showPromptGutter, showStatusLine, experienceMode, harnessControlsEnabled, prefixKeyEnabled, statusLineEnabled
+        case resizeOverlay, resizeOverlayPosition, bellMode, scrollMultiplier, mouseHideWhileTyping, optionAsMeta
+        case quickTerminalEnabled, quickTerminalHotkey, windowPaddingBalance, minimumContrast, themeFit, paneSpacing
+        case paneDensity, paneHeaders, lightDefaultMigrated, pasteProtection, commandFinishedThresholdSeconds, notificationEvents
+        case boldIsBright, secureKeyboardEntry, windowInheritCWD, profiles, triggers, remoteControl
+        case notificationPolicy, power, worktrees, activity, aiSummaries
+    }
+
     public init(
         // First-run "out of the box" look (a fresh install with no imported config):
         // translucent + blurred canvas, Nerd Font, roomy padding, copy-on-select on.
@@ -378,8 +400,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         sidebarVisible: Bool = false,
         showMachineIndicator: Bool = false,
         restoreWindowSize: Bool = true,
-        backgroundOpacity: Float = 0.63,
-        backgroundBlur: Int = 16,
+        backgroundOpacity: Float = 0.85,
+        backgroundBlur: Int = 60,
         windowPaddingX: Float = 14,
         windowPaddingY: Float = 14,
         appearanceMode: HarnessAppearanceMode = .theme,
@@ -420,7 +442,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         offMainParserFramePipeline: Bool = true,
         liveResizeReflow: Bool = true,
         showPromptGutter: Bool = false,
-        showStatusLine: Bool = true,
+        showStatusLine: Bool = false,
         // Fresh installs keep sessions alive after the app quits. A file that
         // never stored a mode still decodes as `.full` in `init(from:)`, so an
         // upgrade does not flip someone who already has a settings file.
@@ -450,7 +472,12 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         windowInheritCWD: Bool = true,
         profiles: [ProfileRule] = [],
         triggers: [TriggerRule] = [],
-        remoteControl: Bool = false
+        remoteControl: Bool = false,
+        worktrees: WorktreeSettings = WorktreeSettings(),
+        activity: ActivitySettings = ActivitySettings(),
+        aiSummaries: AISettings = AISettings(),
+        power: PowerSettings = PowerSettings(),
+        notificationPolicy: NotificationPolicySettings? = nil
     ) {
         self.fontSize = HarnessSettings.clampedFontSize(fontSize)
         self.fontFamily = fontFamily
@@ -530,6 +557,11 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.profiles = profiles
         self.triggers = triggers
         self.remoteControl = remoteControl
+        self.worktrees = worktrees
+        self.activity = activity
+        self.aiSummaries = aiSummaries
+        self.notificationPolicy = notificationPolicy
+        self.power = power
     }
 
     /// Ensure the palette always has exactly 16 slots so index access is safe even if a
@@ -830,6 +862,11 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         // malformed hand-edited rule degrades to defaults instead of corrupt-backing-up the file.
         triggers = try container.decodeIfPresent([TriggerRule].self, forKey: .triggers) ?? []
         remoteControl = try fields.decode(.remoteControl, \.remoteControl)
+        notificationPolicy = try container.decodeIfPresent(NotificationPolicySettings.self, forKey: .notificationPolicy)
+        power = try container.decodeIfPresent(PowerSettings.self, forKey: .power) ?? PowerSettings()
+        worktrees = try container.decodeIfPresent(WorktreeSettings.self, forKey: .worktrees) ?? WorktreeSettings()
+        activity = try container.decodeIfPresent(ActivitySettings.self, forKey: .activity) ?? ActivitySettings()
+        aiSummaries = try container.decodeIfPresent(AISettings.self, forKey: .aiSummaries) ?? AISettings()
     }
 
     private struct ImportContext { let config: ImportedTerminalConfig? }
@@ -844,7 +881,11 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// Live reload never migrates, replaces, or backs up the user's file. The caller keeps
     /// its last working settings when an editor is between writes or the JSON is invalid.
     public static func reload(from url: URL = HarnessPaths.settingsURL) throws -> HarnessSettings {
-        var settings = try decode(Data(contentsOf: url), imported: nil)
+        guard let data = try PrivateFile.read(url) else { throw PrivateFile.Failure.unavailable }
+        return try reload(data: data)
+    }
+    public static func reload(data: Data) throws -> HarnessSettings {
+        var settings = try decode(data, imported: nil)
         settings.backgroundOpacity = clampedOpacity(settings.backgroundOpacity)
         settings.backgroundBlur = clampedBlur(settings.backgroundBlur)
         settings.fontSize = clampedFontSize(settings.fontSize)
@@ -923,9 +964,11 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
             }
             return settings
         }
-        // First-run / user nuked the file: seed from the imported config and persist
-        // immediately so subsequent launches are stable.
-        let seeded = HarnessSettings.makeDefaults(imported: imported)
+        // First launch uses Harness’s own appearance. Importing another terminal’s
+        // preferences remains available explicitly from Settings. Record the observed
+        // signature so the next launch does not reinterpret it as a new import.
+        var seeded = HarnessSettings()
+        seeded.importedConfigSignature = imported?.signature
         do { try seeded.save() }
         catch { fputs("Harness: failed to seed settings.json — \(error)\n", harnessStderr) }
         return seeded
@@ -999,10 +1042,20 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         max(0, value)
     }
 
-    public func save() throws {
-        try HarnessPaths.ensureDirectories()
-        let data = try JSONEncoder().encode(self)
-        try data.write(to: HarnessPaths.settingsURL, options: .atomic)
+    public func save(to url: URL = HarnessPaths.settingsURL, backup: Bool = false) throws {
+        let prior = try PrivateFile.read(url)
+        var root: [String: Any] = [:]
+        if let prior {
+            guard let values = try JSONSerialization.jsonObject(with: prior) as? [String: Any] else { throw PrivateFile.Failure.unavailable }
+            root = values
+        }
+        let values = try JSONSerialization.jsonObject(with: JSONEncoder().encode(self)) as! [String: Any]
+        let daemonSections: Set<String> = ["activity", "power", "notificationPolicy", "worktrees", "aiSummaries"]
+        for key in CodingKeys.allCases.map(\.rawValue) {
+            if daemonSections.contains(key), root[key] != nil { continue }
+            root[key] = values[key]
+        }
+        _ = try PrivateFile.replace(url, data: JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]), expected: prior, backup: backup)
     }
 
     /// Builds a default settings instance, layering imported config values over hardcoded defaults.

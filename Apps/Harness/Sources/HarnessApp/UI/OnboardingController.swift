@@ -36,7 +36,9 @@ enum OnboardingController {
         }
         OnboardingEnvironment.installHooks = { agentID in
             guard let kind = AgentKind(rawValue: agentID) else { throw SetupError.invalid("Unknown agent: \(agentID)") }
-            let result = try AgentHookInstaller.install(agent: kind)
+            let proposal = try await Task.detached(priority: .userInitiated) { try AgentHookInstaller.prepare(agent: kind) }.value
+            guard HookInstallationReview.approve(proposal) else { throw SetupError.invalid("Hook installation was canceled or requires a manual merge.") }
+            let result = try await Task.detached(priority: .userInitiated) { try AgentHookInstaller.apply(proposal) }.value
             guard !result.needsManualMerge, AgentHookInstaller.isInstalled(agent: kind) else {
                 throw SetupError.invalid("Existing settings need a manual merge. See docs/agent-hooks/\(agentID).md.")
             }

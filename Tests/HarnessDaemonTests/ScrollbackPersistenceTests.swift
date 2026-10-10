@@ -12,6 +12,14 @@ private let absenceWindowMicros: UInt32 = 700_000
 /// PTY tests behind `HARNESS_LIVE_DAEMON_TESTS=1`.
 final class ScrollbackPersistenceTests: XCTestCase {
     private var scrollbackURL: URL!
+    private var protection: HistoryProtection {
+        #if os(macOS)
+        return try! HistoryProtection(keyMaterial: Data(repeating: 61, count: 32))
+        #else
+        return .system()
+        #endif
+    }
+    private func persistedText(_ url: URL) -> String { String(decoding: ScrollbackFile.loadTail(url: url, maxBytes: 64 * 1024, protection: protection), as: UTF8.self) }
 
     override func setUpWithError() throws {
         try skipUnlessLiveDaemonTests()
@@ -31,7 +39,8 @@ final class ScrollbackPersistenceTests: XCTestCase {
             rows: 24,
             cols: 80,
             scrollbackBytes: 64 * 1024,
-            scrollbackURL: scrollbackURL
+            scrollbackURL: scrollbackURL,
+            historyProtection: protection
         )
         pty.start() // reading/exit-watching is now owner-initiated (deferred from init)
         return pty
@@ -147,7 +156,7 @@ final class ScrollbackPersistenceTests: XCTestCase {
         pty.write("echo AFTER_RESUME_MARK\n")
         XCTAssertTrue(waitUntil { acc.contains("AFTER_RESUME_MARK") })
         pty.flushScrollback()
-        let resumed = (try? String(contentsOf: scrollbackURL, encoding: .utf8)) ?? ""
+        let resumed = persistedText(scrollbackURL)
         XCTAssertTrue(resumed.contains("AFTER_RESUME_MARK"), "re-enable resumes persistence")
         XCTAssertFalse(resumed.contains("WHILE_SUSPENDED_MARK"),
                        "suspended-window output stays memory-only by design")
@@ -177,7 +186,7 @@ final class ScrollbackPersistenceTests: XCTestCase {
         let perms = try XCTUnwrap(
             FileManager.default.attributesOfItem(atPath: scrollbackURL.path)[.posixPermissions] as? NSNumber
         )
-        XCTAssertEqual(perms.intValue & 0o777, 0o600, ".scroll files hold raw PTY output — owner-only")
+        XCTAssertEqual(perms.intValue & 0o777, 0o600, ".scroll files hold captured PTY history — owner-only")
     }
 
     /// Registry-level tests need a HARNESS_HOME of their own so they never touch the user's
@@ -203,7 +212,7 @@ final class ScrollbackPersistenceTests: XCTestCase {
     }
 
     private func runRegistryHonorsPersistScrollbackOption() throws {
-        let registry = SurfaceRegistry()
+        let registry = SurfaceRegistry(historyProtection: protection)
         guard case let .surfaces(initial) = registry.handle(.listSurfaces), let seeded = initial.first else {
             return XCTFail("expected a seeded surface")
         }
@@ -250,7 +259,7 @@ final class ScrollbackPersistenceTests: XCTestCase {
     }
 
     private func runPaneIDTargetedOptOut() throws {
-        let registry = SurfaceRegistry()
+        let registry = SurfaceRegistry(historyProtection: protection)
         guard case let .surfaces(initial) = registry.handle(.listSurfaces), let seeded = initial.first else {
             return XCTFail("expected a seeded surface")
         }
@@ -286,7 +295,7 @@ final class ScrollbackPersistenceTests: XCTestCase {
         registry.flushAllStores()
         registry.stopMonitoring()
         try Data("stale log".utf8).write(to: seededURL)
-        let revived = SurfaceRegistry()
+        let revived = SurfaceRegistry(historyProtection: protection)
         defer { revived.stopMonitoring() }
         XCTAssertFalse(FileManager.default.fileExists(atPath: seededURL.path),
                        "respawn must resolve the PaneID-keyed opt-out at spawn and drop the stale log")
@@ -302,7 +311,7 @@ final class ScrollbackPersistenceTests: XCTestCase {
     /// value that silently never applies — it's a security control.
     func testNonPaneScopedPersistScrollbackIsRejected() throws {
         try withIsolatedHarnessHome {
-            let registry = SurfaceRegistry()
+            let registry = SurfaceRegistry(historyProtection: protection)
             defer { registry.stopMonitoring() }
             for scope in ["tab", "session", "workspace"] {
                 guard case let .error(message) = registry.handle(.setOption(
@@ -310,7 +319,7 @@ final class ScrollbackPersistenceTests: XCTestCase {
                 )) else {
                     return XCTFail("\(scope)-scoped persist-scrollback must be rejected loudly")
                 }
-                XCTAssertTrue(message.contains("pane- or global-scoped"), "unexpected error: \(message)")
+                XCTAssertTrue(message.contains("global scope or an exact pane target"), "unexpected error: \(message)")
             }
         }
     }
@@ -324,7 +333,7 @@ final class ScrollbackPersistenceTests: XCTestCase {
     }
 
     private func runSpawnedOffSurfaceResumes() throws {
-        let registry = SurfaceRegistry()
+        let registry = SurfaceRegistry(historyProtection: protection)
         defer { registry.stopMonitoring() }
         guard case .ok = registry.handle(.setOption(
             scope: "global", target: nil, key: "persist-scrollback", rawValue: "off"
@@ -357,7 +366,7 @@ final class ScrollbackPersistenceTests: XCTestCase {
         XCTAssertTrue(
             waitUntil(pollIntervalMicros: 200_000) {
                 _ = registry.handle(.sendData(surfaceID: surfaceID, data: Data("echo AFTER_RESPAWN\n".utf8)))
-                return (try? String(contentsOf: url, encoding: .utf8))?.contains("AFTER_RESPAWN") == true
+                return persistedText(url).contains("AFTER_RESPAWN")
             },
             "a live respawn of a re-enabled surface must persist scrollback"
         )

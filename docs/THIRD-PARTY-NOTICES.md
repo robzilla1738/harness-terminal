@@ -7,12 +7,13 @@ product documentation is revised.
 
 ## Agent platform icons
 
-Harness displays locally bundled logos for 23 coding tools. See the complete
+Harness displays locally bundled logos for 37 coding tools. See the complete
 [source catalog](../Apps/Harness/Resources/AgentLogos/README.md) for official project
 pages, pinned artwork URLs, SHA-256 hashes, transformations, and licenses. Original
 license texts are retained in `Apps/Harness/Resources/AgentLogos/licenses` and
-included in packaged apps. Most marks are monochrome vectors; Crush retains its
-original raster artwork. Only unidentified generic agents use a monogram.
+included in packaged apps. Vector geometry and original Crush, Codebuff, and Abacus AI raster artwork are
+retained. The native renderer extracts white transparent template masks from the
+three raster sources; it does not display their colored backgrounds. Only unidentified generic agents use a monogram.
 
 Platform names and logos are trademarks of their respective owners, used solely
 to identify the corresponding tool. No affiliation or endorsement is implied.

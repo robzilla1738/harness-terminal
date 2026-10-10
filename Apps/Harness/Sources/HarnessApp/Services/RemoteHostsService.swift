@@ -74,11 +74,11 @@ final class RemoteHostsService: @unchecked Sendable {
 
     /// Bring up (or reuse) the tunnel to `name` and return the local endpoint that reaches it.
     /// Blocking — call off the main thread.
-    func connect(named name: String) throws -> Endpoint {
+    func connect(named name: String, expectedEpoch: UInt64? = nil) throws -> Endpoint {
         guard let host = store.host(named: name) else {
             throw DaemonSessionError.daemonError("unknown remote host '\(name)'")
         }
-        return try SSHTunnelManager.shared.endpoint(for: host)
+        return try SSHTunnelManager.shared.endpoint(for: host, expectedEpoch: expectedEpoch)
     }
 
     /// Tear down a host's tunnel (the coordinator has already detached from it).

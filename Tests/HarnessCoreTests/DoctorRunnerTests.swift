@@ -85,8 +85,8 @@ final class DoctorRunnerTests: XCTestCase {
                                       installedAgentHooks: [])
         let row = check(report, "Daemon version")
         XCTAssertEqual(row?.status, .warn, "a stale daemon is recoverable — warn, don't fail")
-        XCTAssertTrue(row?.detail.contains("harness-cli install") == true,
-                      "the warning should tell the user how to heal")
+        XCTAssertTrue(row?.detail.contains("daemon-restart --if-empty") == true,
+                      "the warning should recommend a shell-preserving update")
         XCTAssertEqual(report.exitCode, 0)
     }
 

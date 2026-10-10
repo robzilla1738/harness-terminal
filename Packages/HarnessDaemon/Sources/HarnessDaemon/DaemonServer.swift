@@ -11,7 +11,12 @@ import HarnessTerminalEngine
 /// @unchecked Sendable: socket-accept and subscription state are confined to the serial `queue`.
 public final class DaemonServer: @unchecked Sendable {
     public let registry: SurfaceRegistry
+    /// Set before starting the listener. Executed off the socket queue after replying.
+    public var onShutdown: (@Sendable () -> Void)?
     private var listener: DispatchSourceRead?
+    private var checkpointTimer: DispatchSourceTimer?
+    private let checkpointTimerLock = NSLock()
+    private var listenerSocketIdentity: (device: dev_t, inode: ino_t)?
     private let queue = DispatchQueue(label: "com.robert.harness.daemon")
     private var clientBuffers: [Int32: IPCReadBuffer] = [:]
     /// `read(2)` destination reused by every `readClient` — reads all run on the serial `queue`,
@@ -66,6 +71,7 @@ public final class DaemonServer: @unchecked Sendable {
     private var streamClients: Set<Int32> = []
     private var inputErrorClients: Set<Int32> = []
     /// Snapshot subscribers that asked for client directives (older apps can't decode them).
+    private var notificationSubscribers: Set<Int32> = []
     private var directiveSubscribers: Set<Int32> = []
 
     private struct ClientRecord {
@@ -97,7 +103,8 @@ public final class DaemonServer: @unchecked Sendable {
     private let startedAt = Date()
     /// This daemon's boot id. A client may resume an attach only within the same epoch:
     /// a restarted daemon numbers its ring afresh.
-    private let epoch = UUID().uuidString
+    private let epoch = ProcessInfo.processInfo.environment["HARNESS_STREAM_EPOCH"] ?? UUID().uuidString
+    private let socketURL: URL
     private let searchQueue: OperationQueue = {
         let queue = OperationQueue()
         queue.name = "com.robert.harness.search"
@@ -107,14 +114,16 @@ public final class DaemonServer: @unchecked Sendable {
     private var cancelledSearches: [UUID: Date] = [:]
     private let mobileHistory = MobileHistoryStore()
     private var searches: [UUID: (fd: Int32, cancellation: SurfaceRegistry.FlagBox)] = [:]
+    private var clientDescriptors: [Int32: ChannelDescriptor] = [:]
     /// Startup phases the server itself times (`listen`); the registry times the rest.
     private var startupMillis: [String: Double] = [:]
 
     /// `enableVersionBanner` is passed by the real daemon entry point only (`main.swift`):
     /// the first-run / what's-new banner is daemon policy, not something every embedded or
     /// test registry should emit into freshly spawned PTYs.
-    public init(enableVersionBanner: Bool = false) {
-        registry = SurfaceRegistry(enableVersionBanner: enableVersionBanner)
+    public init(enableVersionBanner: Bool = false, enablePowerManagement: Bool = false, socketURL: URL = HarnessPaths.socketURL, mutationLease: DaemonMutationLease? = nil) {
+        self.socketURL = socketURL
+        registry = SurfaceRegistry(enableVersionBanner: enableVersionBanner, enablePowerManagement: enablePowerManagement, mutationLease: mutationLease)
         // `size-mode` set with `harness-cli size-mode` survives a daemon restart.
         if let raw = registry.optionStore.get("size-mode")?.stringValue, let mode = SurfaceSizeMode(rawValue: raw) {
             sizeArbiter = SurfaceSizeArbiter(mode: mode)
@@ -142,6 +151,12 @@ public final class DaemonServer: @unchecked Sendable {
                 self?.finishPaneWaits(surfaceID: surfaceID, until: "child", status: status)
             }
         }
+        registry.notifications.onDesktop = { [weak self] delivery in
+            self?.queue.async { [weak self] in
+                guard let self, let fd = self.notificationSubscribers.sorted().first(where: { self.snapshotSubscribers.contains($0) }) else { return }
+                self.send(.clientDirective(.notification(delivery)), to: fd)
+            }
+        }
         registry.onClientDirective = { [weak self] directive in
             self?.queue.async { [weak self] in
                 guard let self else { return }
@@ -165,7 +180,7 @@ public final class DaemonServer: @unchecked Sendable {
         var phase = DispatchTime.now()
         defer { startupMillis["listen"] = SurfaceRegistry.millis(since: &phase) }
         try HarnessPaths.ensureDirectories()
-        if FileManager.default.fileExists(atPath: HarnessPaths.socketURL.path) {
+        if FileManager.default.fileExists(atPath: socketURL.path) {
             // Stale-socket recovery ordering: consult the PID file FIRST. If it names a dead
             // or non-HarnessDaemon process the socket is definitively stale — remove it without
             // spending the 200 ms ping timeout. Only fall back to the ping when the PID file is
@@ -189,18 +204,21 @@ public final class DaemonServer: @unchecked Sendable {
                 // ping, which is the authoritative "is it really serving?" check.
                 // .proceed means the PID file was written by us (re-exec path): also fall through.
             }
+            // A live owner that is temporarily unresponsive is never a stale socket.
+            if SessionHostClient.configured == nil, case let .alive(owner) = DaemonOwnership.probe(), owner != getpid() { throw DaemonError.alreadyRunning }
             // Ping only when the PID file didn't already tell us the socket is stale.
             if !socketIsClearlyStale {
-                if case .pong = try? DaemonClient().request(.ping, timeout: 0.2) {
+                if case .pong = try? DaemonClient(endpoint: .unix(path: socketURL.path)).request(.ping, timeout: 0.2) {
                     throw DaemonError.alreadyRunning
                 }
             }
-            try FileManager.default.removeItem(at: HarnessPaths.socketURL)
+            try FileManager.default.removeItem(at: socketURL)
         }
 
         // Validate the socket path fits `sun_path` before binding, so a deep HARNESS_HOME fails
         // with a clear message instead of `strncpy`-truncating and binding the wrong socket.
-        let socketPath = try HarnessPaths.validatedSocketPath()
+        let socketPath = socketURL.path
+        guard socketPath.utf8.count < HarnessPaths.maxSocketPathLength else { throw DaemonError.socketFailed }
         let fd = makeUnixStreamSocket()
         guard fd >= 0 else { throw DaemonError.socketFailed }
         setNoSigPipe(fd)
@@ -248,7 +266,7 @@ public final class DaemonServer: @unchecked Sendable {
         // daemon (spawn PTYs, read pane output, run hook shell commands). 0o600 means
         // only our UID can even connect; the peer-credential check on accept is the
         // second layer.
-        if chmod(HarnessPaths.socketURL.path, 0o600) != 0 {
+        if chmod(socketURL.path, 0o600) != 0 {
             close(fd)
             throw DaemonError.bindFailed
         }
@@ -266,10 +284,23 @@ public final class DaemonServer: @unchecked Sendable {
         }
         // Own the listener fd's lifetime: cancelling the source (in `stop()`) closes it, so an
         // orderly shutdown doesn't leak the listening socket descriptor.
-        source.setCancelHandler { close(fd) }
+        var boundSocket = stat()
+        _ = lstat(socketPath, &boundSocket)
+        let boundDevice = boundSocket.st_dev
+        let boundInode = boundSocket.st_ino
+        listenerSocketIdentity = (boundDevice, boundInode)
+        source.setCancelHandler {
+            var current = stat()
+            if lstat(socketPath, &current) == 0,
+               current.st_dev == boundDevice, current.st_ino == boundInode {
+                unlink(socketPath)
+            }
+            close(fd)
+        }
         source.resume()
         listener = source
-        fputs("HarnessDaemon listening at \(HarnessPaths.socketURL.path)\n", harnessStderr)
+        if SessionHostClient.configured != nil, !registry.isQuiesced { startHostCheckpointTimer() }
+        fputs("HarnessDaemon listening at \(socketURL.path)\n", harnessStderr)
     }
 
     private func acceptConnection(listenerFD: Int32) {
@@ -285,6 +316,8 @@ public final class DaemonServer: @unchecked Sendable {
             return
         }
         setNoSigPipe(clientFD)
+        let descriptor = ChannelDescriptor(clientFD)
+        clientDescriptors[clientFD] = descriptor
         // Non-blocking so a slow/stuck client never blocks `write` on the serial queue.
         _ = harness_set_nonblocking(clientFD)
         clientBuffers[clientFD] = IPCReadBuffer()
@@ -296,8 +329,8 @@ public final class DaemonServer: @unchecked Sendable {
         source.setEventHandler { [weak self] in
             self?.readClient(fd: clientFD, source: source)
         }
-        source.setCancelHandler { [weak self] in
-            guard let self else { close(clientFD); return }
+        descriptor.register(source) { [weak self, descriptor] in
+            guard let self else { descriptor.retire(); return }
             for (id, search) in self.searches where search.fd == clientFD {
                 search.cancellation.update(true)
                 self.searches.removeValue(forKey: id)
@@ -317,7 +350,8 @@ public final class DaemonServer: @unchecked Sendable {
             if let wsrc = self.writeSources.removeValue(forKey: clientFD) { wsrc.cancel() }
             self.cancelSubscriptions(for: clientFD)
             for granted in self.waitForRegistry.remove(fd: clientFD) { self.send(.ok, to: granted) }
-            close(clientFD)
+            self.clientDescriptors.removeValue(forKey: clientFD)
+            descriptor.retire()
         }
         clientSources[clientFD] = source
         source.resume()
@@ -402,19 +436,23 @@ public final class DaemonServer: @unchecked Sendable {
                 _ = surfaceID
                 continue
             }
-            if case let .subscribeSnapshot(label, directives) = request {
+            if case let .subscribeSnapshot(label, directives, capabilities) = request {
                 if directives == true { directiveSubscribers.insert(fd) }
                 handleSubscribeSnapshot(label: label, fd: fd)
+                if directives == true, let capabilities, capabilities.contains(DaemonStats.clientCapabilities) {
+                    let negotiated = Set(capabilities.prefix(64)).intersection(DaemonStats.currentCapabilities)
+                    if negotiated.contains(DaemonStats.notificationPolicy) { notificationSubscribers.insert(fd) }
+                    send(.clientDirective(.capabilities(negotiated.sorted())), to: fd)
+                }
                 continue
             }
             if case let .resizeSurface(surfaceID, rows, cols) = request {
-                handleResize(surfaceID: surfaceID, rows: rows, cols: cols, fd: fd)
-                send(.ok, to: fd)
+                send(handleResize(surfaceID: surfaceID, rows: rows, cols: cols, fd: fd), to: fd)
                 pushOwnership(surfaceID)
                 continue
             }
             if case let .setSurfaceSizeMode(mode) = request {
-                applySizeMode(mode)
+                if let failure = applySizeMode(mode) { send(.error(failure), to: fd); continue }
                 registry.optionStore.set(.string(mode.rawValue), key: "size-mode")
                 send(.ok, to: fd)
                 continue
@@ -430,13 +468,14 @@ public final class DaemonServer: @unchecked Sendable {
                 } else {
                     targetFD = fd
                 }
+                let previousArbiter = sizeArbiter
                 let taken = sizeArbiter.take(client: targetFD, surface: surfaceID)
                 guard taken.accepted else {
                     send(.error("This client must attach and send its terminal size before taking control."), to: fd)
                     continue
                 }
                 if let size = taken.size {
-                    _ = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols))
+                    if case let .error(message) = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols)) { sizeArbiter = previousArbiter; send(.error(message), to: fd); continue }
                 }
                 send(.ok, to: fd)
                 pushOwnership(surfaceID)
@@ -501,10 +540,53 @@ public final class DaemonServer: @unchecked Sendable {
                 }
                 continue
             }
+            if request.requiresLocalOwner, peerUID(fd) != UInt32(getuid()) || clients[fd]?.tunnel == true { send(.error("This administrative operation requires a local owner connection."), to: fd); continue }
+            if case let .activity(.repositoryDigest(id, from, to, offset, limit)) = request {
+                scheduleSearch(id: id, fd: fd) { [registry] cancellation in
+                    registry.handleActivity(.repositoryDigest(requestID: id, from: from, to: to, offset: offset, limit: limit), cancelled: { cancellation.read() })
+                }
+                continue
+            }
+            if case let .activity(.hookPolicy(operation)) = request {
+                scheduleSearch(id: UUID(), fd: fd) { [registry] cancellation in
+                    guard !cancellation.read() else { return .error("Cancelled") }
+                    return registry.handleActivity(.hookPolicy(operation))
+                }
+                continue
+            }
+            if case let .activity(.schedules(id, operation)) = request {
+                guard peerUID(fd) == UInt32(getuid()), clients[fd]?.tunnel != true else { send(.error("Scheduling administration requires the local host."), to: fd); continue }
+                scheduleSearch(id: id, fd: fd) { [registry] cancellation in
+                    guard !cancellation.read() else { return .error("Cancelled") }
+                    return registry.handleActivity(.schedules(requestID: id, operation: operation), cancelled: { cancellation.read() })
+                }
+                continue
+            }
+            if case let .activity(.fanout(id, operation)) = request {
+                guard peerUID(fd) == UInt32(getuid()), clients[fd]?.tunnel != true else { send(.error("Fan-out administration requires the local host."), to: fd); continue }
+                scheduleSearch(id: id, fd: fd) { [registry] cancellation in
+                    registry.handleActivity(.fanout(requestID: id, operation: operation), cancelled: { cancellation.read() })
+                }
+                continue
+            }
+            if case let .activity(.worktrees(id, operation)) = request {
+                guard peerUID(fd) == UInt32(getuid()), clients[fd]?.tunnel != true else { send(.error("Managed worktree administration requires the local host."), to: fd); continue }
+                scheduleSearch(id: id, fd: fd) { [registry] cancellation in
+                    registry.handleActivity(.worktrees(requestID: id, operation: operation), cancelled: { cancellation.read() })
+                }
+                continue
+            }
             if case let .searchOutput(id, query, caseSensitive, sessionID, offset, generation) = request {
                 scheduleSearch(id: id, fd: fd) { [registry, epoch] cancellation in
                     registry.searchOutput(query: query, caseSensitive: caseSensitive, sessionID: sessionID,
                                           offset: offset, epoch: epoch, cancelled: cancellation, generation: generation)
+                }
+                continue
+            }
+            if case let .searchOutputFiltered(id, query, caseSensitive, sessionID, offset, generation, filter) = request {
+                scheduleSearch(id: id, fd: fd) { [registry, epoch] cancellation in
+                    registry.searchOutput(query: query, caseSensitive: caseSensitive, sessionID: sessionID,
+                        offset: offset, epoch: epoch, cancelled: cancellation, generation: generation, filter: filter)
                 }
                 continue
             }
@@ -593,6 +675,28 @@ public final class DaemonServer: @unchecked Sendable {
 
     private func handleClientLifecycle(_ request: IPCRequest, fd: Int32) -> IPCResponse? {
         switch request {
+        case .activity(.hook), .activity(.resumePolicy), .activity(.resume), .activity(.explain), .activity(.power), .activity(.notifications), .activity(.terminateTree), .activity(.configure), .retryHistory:
+            guard peerUID(fd) == UInt32(getuid()), clients[fd]?.tunnel != true else { return .error("This operation is available only to local owner processes.") }
+            return nil
+        case let .handoverDaemon(phase, checkpoint):
+            guard SessionHostClient.configured != nil, peerUID(fd) == UInt32(getuid()) else {
+                return .error("Handover controls are available only on the private daemon socket.")
+            }
+            let response = registry.handover(phase, checkpoint: checkpoint)
+            if phase != .prepare, case .ok = response { startHostCheckpointTimer() }
+            return response
+        case .replaceDaemon:
+            return .error("Daemon replacement requires the stable session host. Close legacy shells before adopting that architecture.")
+        case let .shutdownDaemon(requireEmpty):
+            guard peerUID(fd) == UInt32(getuid()), clients[fd]?.tunnel != true else {
+                return .error("Session-service administration requires a local owner connection.")
+            }
+            guard let onShutdown else { return .error("Shutdown is unavailable in this host.") }
+            let result = registry.beginShutdown(requireEmpty: requireEmpty)
+            if case .ok = result {
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.1, execute: onShutdown)
+            }
+            return result
         case let .identifyClient(label):
             // Idempotent: identifying twice on the same socket updates the label
             // but keeps the same client ID so callers can identify-then-act.
@@ -659,7 +763,7 @@ public final class DaemonServer: @unchecked Sendable {
             let telemetry = registry.surfaceTelemetry
             let totalSubs = outputSubscriptions.values.reduce(0) { $0 + $1.count }
             let parked = registry.parkTelemetry
-            let stats = DaemonStats(
+            var stats = DaemonStats(
                 pid: getpid(),
                 uptimeSeconds: Date().timeIntervalSince(startedAt),
                 surfaceCount: telemetry.surfaceCount,
@@ -669,13 +773,17 @@ public final class DaemonServer: @unchecked Sendable {
                 snapshotRevision: registry.revision,
                 version: HarnessVersion.short,
                 build: HarnessVersion.build,
-                capabilities: [DaemonStats.mobileCompanion, DaemonStats.attachStream, DaemonStats.paneAttention, DaemonStats.sessionLibrary, DaemonStats.outputSearch, DaemonStats.pathSearch],
+                capabilities: DaemonStats.currentCapabilities + (SessionHostClient.configured == nil ? [] : [DaemonStats.sessionHostWorker]),
                 parkedSurfaceCount: parked.count,
                 parkedStoredBytes: parked.stored,
                 parkedRawBytes: parked.raw,
                 startupMillis: registry.startupMillis.merging(startupMillis) { $1 },
-                epoch: epoch
+                epoch: epoch,
+                protocolLevel: HarnessVersion.protocolLevel
             )
+            stats.daemonAvailable = true
+            stats.historyProtection = registry.activity.store.protectionKind
+            stats.historyUnavailable = registry.activity.unavailable()
             return .daemonStats(stats)
         default:
             return nil
@@ -784,9 +892,10 @@ public final class DaemonServer: @unchecked Sendable {
     }
 
     private func ensureWriteSource(fd: Int32) {
-        guard writeSources[fd] == nil else { return }
+        guard writeSources[fd] == nil, let descriptor = clientDescriptors[fd] else { return }
         let src = DispatchSource.makeWriteSource(fileDescriptor: fd, queue: queue)
         src.setEventHandler { [weak self] in self?.flushWrites(fd: fd) }
+        descriptor.register(src)
         writeSources[fd] = src
         src.resume()
     }
@@ -814,7 +923,7 @@ public final class DaemonServer: @unchecked Sendable {
         streamClients.insert(fd)
         if attach.inputErrors == true { inputErrorClients.insert(fd) }
         let gate = AttachGate()
-        guard let token = addOutputSubscription(surfaceID: attach.surfaceID, label: attach.label, fd: fd, gate: gate) else {
+        guard let token = addOutputSubscription(surfaceID: attach.surfaceID, label: attach.label, fd: fd, gate: gate, geometryEvents: attach.geometryEvents == true) else {
             send(.error("Surface not found"), to: fd)
             return
         }
@@ -840,7 +949,7 @@ public final class DaemonServer: @unchecked Sendable {
                     self.sendDataFrame(chunk.data, sequence: chunk.sequence, to: fd)
                 }
                 for frame in gate.open(floor: start.endSequence) {
-                    self.sendDataFrame(frame.data, sequence: frame.sequence, to: fd)
+                    if let wire = frame.wire { self.enqueue(wire, to: fd) }
                 }
             }
         }
@@ -849,9 +958,19 @@ public final class DaemonServer: @unchecked Sendable {
     /// Streams `surfaceID`'s output to `fd` and registers `fd` as a client. `gate` holds live
     /// frames until an attach's history is out. The subscription's token, or nil when the
     /// surface doesn't exist.
-    private func addOutputSubscription(surfaceID: String, label: String?, fd: Int32, gate: AttachGate?) -> UUID? {
+    private func addOutputSubscription(surfaceID: String, label: String?, fd: Int32, gate: AttachGate?, geometryEvents: Bool = false) -> UUID? {
         let deliveryID = UUID()
-        guard let token = registry.subscribe(surfaceID: surfaceID, handler: { [weak self] data, sequence in
+        let resizeHandler: (@Sendable (ReplaySize) -> Void)?
+        if geometryEvents {
+            resizeHandler = { [weak self] size in
+            self?.queue.async { [weak self] in
+                guard let self, self.outputSubscriptions[fd]?.contains(where: { $0.deliveryID == deliveryID }) == true else { return }
+                if let gate, !gate.admits(.resize(size)) { if gate.overflowed { self.clientSources[fd]?.cancel() }; return }
+                self.send(.terminalResize(size), to: fd)
+            }
+            }
+        } else { resizeHandler = nil }
+        guard let token = registry.subscribe(surfaceID: surfaceID, onResize: resizeHandler, handler: { [weak self] data, sequence in
             guard let server = self else { return }
             server.queue.async { [weak server] in
                 // Cancellation cannot retract a callback already captured by the PTY's
@@ -860,7 +979,7 @@ public final class DaemonServer: @unchecked Sendable {
                 guard let server,
                       server.outputSubscriptions[fd]?.contains(where: { $0.deliveryID == deliveryID }) == true
                 else { return }
-                if let gate, !gate.admits(data, sequence: sequence) { return }
+                if let gate, !gate.admits(.output(data, sequence)) { if gate.overflowed { server.clientSources[fd]?.cancel() }; return }
                 server.registry.metrics.recordOutputNotification()
                 server.sendDataFrame(data, sequence: sequence, to: fd)
             }
@@ -896,15 +1015,15 @@ public final class DaemonServer: @unchecked Sendable {
     /// Record this client's requested size. In `smallest` mode the PTY becomes the
     /// minimum vote. In `owner` mode only the owner's vote changes the PTY; a
     /// non-owner records an advisory size and this returns without resizing.
-    private func handleResize(surfaceID: String, rows: UInt16, cols: UInt16, fd: Int32) {
-        guard TerminalGeometry.isValid(cols: Int(cols), rows: Int(rows)) else {
-            send(.error("Terminal dimensions exceed the supported grid limit."), to: fd)
-            return
-        }
-        // A read-only watcher sees the pane at the size the writers chose.
-        guard !readOnlyClients.contains(fd) else { return }
-        guard let size = sizeArbiter.vote(client: fd, surface: surfaceID, rows: rows, cols: cols) else { return }
-        _ = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols))
+    private func handleResize(surfaceID: String, rows: UInt16, cols: UInt16, fd: Int32) -> IPCResponse {
+        guard TerminalGeometry.isValid(cols: Int(cols), rows: Int(rows)) else { return .error("Terminal dimensions exceed the supported grid limit.") }
+        guard registry.surfaceSize(surfaceID) != nil else { return .error("Surface not found.") }
+        guard !readOnlyClients.contains(fd) else { return .ok }
+        let previousArbiter = sizeArbiter
+        guard let size = sizeArbiter.vote(client: fd, surface: surfaceID, rows: rows, cols: cols) else { return .ok }
+        let response = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols))
+        if case .error = response { sizeArbiter = previousArbiter }
+        return response
     }
 
     private func pushFollow(_ event: FollowEvent) {
@@ -1000,21 +1119,27 @@ public final class DaemonServer: @unchecked Sendable {
         streamClients.remove(fd)
         inputErrorClients.remove(fd)
         directiveSubscribers.remove(fd)
+        notificationSubscribers.remove(fd)
         let surfaces = sentOwnership.removeValue(forKey: fd).map { Array($0.keys) } ?? []
         surfaces.forEach(pushOwnership)
     }
 
-    private func applySizeMode(_ mode: SurfaceSizeMode) {
+    private func applySizeMode(_ mode: SurfaceSizeMode) -> String? {
+        let previous = sizeArbiter
         for (surfaceID, size) in sizeArbiter.setMode(mode) {
-            _ = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols))
+            if case let .error(message) = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols)) {
+                sizeArbiter = previous
+                return "Size mode change could not be completed; previous voting rules were retained. Some panes may already have resized. Inspect their current sizes. " + message
+            }
         }
         Set(outputSubscriptions.values.flatMap { $0.map(\.surfaceID) }).forEach(pushOwnership)
+        return nil
     }
 
     /// Tell each client attached to `surfaceID` whether it owns the size and what the size is,
     /// when that changed for it. A client that hasn't voted yet hears once it does.
     private func pushOwnership(_ surfaceID: String) {
-        guard let size = sizeArbiter.effectiveSize(surfaceID) else { return }
+        guard let size = registry.surfaceSize(surfaceID) else { return }
         let owner = sizeArbiter.owner(of: surfaceID)
         let responder = sizeArbiter.responder(of: surfaceID)
         for (fd, subscriptions) in outputSubscriptions where streamClients.contains(fd) && subscriptions.contains(where: { $0.surfaceID == surfaceID }) {
@@ -1037,11 +1162,27 @@ public final class DaemonServer: @unchecked Sendable {
     /// Cancel the accept loop and tear down all client connections + subscriptions.
     /// Lets a server shut down cleanly (used by integration tests and for an orderly
     /// daemon teardown).
+    private func startHostCheckpointTimer() {
+        checkpointTimerLock.lock(); defer { checkpointTimerLock.unlock() }
+        guard checkpointTimer == nil, let host = SessionHostClient.configured else { return }
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "com.harness.daemon.checkpoints"))
+        timer.schedule(deadline: .now(), repeating: 1)
+        timer.setEventHandler { [weak self] in
+            guard let self, !self.registry.isQuiesced,
+                  case let .text(text) = self.registry.observationCheckpoint() else { return }
+            _ = try? host.request(.applicationCheckpoint(Data(text.utf8)), timeout: 1)
+        }
+        timer.resume(); checkpointTimer = timer
+    }
+
     public func stop() {
+        checkpointTimerLock.lock()
+        checkpointTimer?.cancel(); checkpointTimer = nil
+        checkpointTimerLock.unlock()
         // Stop the background timers first (they have their own queues), then tear down the
         // socket layer. Otherwise a scan/monitor tick could fire against a half-stopped server.
         AgentScanner.shared.stop()
-        registry.stopMonitoring()
+        registry.stopMonitoring(); registry.power.suspend(); registry.notifications.suspend(); registry.suspendScheduling(); registry.suspendAISummaries()
         // Persist any buffered scrollback AND the latest layout snapshot before tearing down, so a
         // graceful restart replays the most recent output and restores the last committed layout
         // instead of losing the last debounce window of either.
@@ -1051,6 +1192,14 @@ public final class DaemonServer: @unchecked Sendable {
         // mutation in any burst's debounce window is never silently discarded on shutdown.
         registry.flushAllStores()
         queue.sync {
+            if let identity = listenerSocketIdentity {
+                var current = stat()
+                if lstat(socketURL.path, &current) == 0,
+                   current.st_dev == identity.device, current.st_ino == identity.inode {
+                    unlink(socketURL.path)
+                }
+                listenerSocketIdentity = nil
+            }
             listener?.cancel() // cancel handler closes the listener fd
             listener = nil
             // Give pending replies a bounded chance to drain before the fds close — a
@@ -1093,22 +1242,20 @@ public enum DaemonError: Error, CustomStringConvertible {
 /// An attach's live frames: held while its history is read, then sent from where the history
 /// ends. Touched only on the server queue.
 private final class AttachGate: @unchecked Sendable {
-    private var held: [(data: Data, sequence: UInt64)]? = []
+    private var held: [TerminalStreamFrame]? = []
+    private var heldBytes = 0
     private var floor: UInt64 = 0
-
-    /// Whether a frame goes out now. One that arrives before `open` is kept for it.
-    func admits(_ data: Data, sequence: UInt64) -> Bool {
+    private(set) var overflowed = false
+    func admits(_ frame: TerminalStreamFrame) -> Bool {
+        guard !overflowed else { return false }
         guard held == nil else {
-            held?.append((data, sequence))
-            return false
+            guard heldBytes <= (8 << 20) - frame.cost, held!.count < 32768 else { overflowed = true; held = []; return false }
+            held?.append(frame); heldBytes += frame.cost; return false
         }
-        return sequence >= floor
+        return frame.sequence >= floor
     }
-
-    /// Stop holding: the held frames at or past `floor`, in order.
-    func open(floor: UInt64) -> [(data: Data, sequence: UInt64)] {
-        self.floor = floor
-        defer { held = nil }
-        return (held ?? []).filter { $0.sequence >= floor }
+    func open(floor: UInt64) -> [TerminalStreamFrame] {
+        self.floor = floor; defer { held = nil; heldBytes = 0 }
+        return overflowed ? [] : (held ?? []).filter { $0.sequence >= floor }
     }
 }

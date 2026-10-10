@@ -65,6 +65,14 @@ public enum DoctorRunner {
         //     stale-daemon signature (an app update refreshed the bundle but not the
         //     launchd-supervised copy — issue #60). nil build = a daemon too old to report one.
         if daemonReachable {
+            if daemonStats?.build == HarnessVersion.build, daemonStats?.updateAvailable == true {
+                checks.append(.init("Daemon capabilities", .warn,
+                    "An update adds client capabilities even though the build number matches. Shells are preserved; use harness-cli daemon-restart --if-empty when ready."))
+            }
+            if daemonStats?.compatibility != .compatible {
+                checks.append(.init("Daemon protocol", .warn,
+                    "\(daemonStats?.compatibility.rawValue ?? "unknown") protocol; existing shells have been preserved. Inspect the running service before requesting an explicit restart."))
+            }
             if let build = daemonStats?.build, build == HarnessVersion.build {
                 checks.append(.init("Daemon version", .pass,
                     "daemon \(daemonStats?.version ?? "?") (\(build)) matches CLI \(HarnessVersion.short) (\(HarnessVersion.build))"))
@@ -72,7 +80,7 @@ public enum DoctorRunner {
                 let daemonDesc = daemonStats?.build.map { "\(daemonStats?.version ?? "?") (\($0))" }
                     ?? "pre-handshake (no version reported)"
                 checks.append(.init("Daemon version", .warn,
-                    "daemon \(daemonDesc) != CLI \(HarnessVersion.short) (\(HarnessVersion.build)) — restart Harness.app, or run: harness-cli install"))
+                    "daemon \(daemonDesc), CLI \(HarnessVersion.short) (\(HarnessVersion.build)) — update pending; existing shells are preserved. Use harness-cli daemon-restart --if-empty when ready."))
             }
         }
 
