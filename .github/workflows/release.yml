@@ -80,6 +80,21 @@ jobs:
           echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "APP_BUILD=$BUILD" >> "$GITHUB_ENV"
 
+      - name: Prepare public release notes
+        run: |
+          python3 - <<'PYNOTES'
+          import os, pathlib
+          text = pathlib.Path("CHANGELOG.md").read_text()
+          heading = "## [" + os.environ["APP_VERSION"] + "] - "
+          start = text.index(heading)
+          body = text[text.index("\n", start) + 1:]
+          body = body.split("\n## [", 1)[0].strip()
+          path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "harness-release-notes.md"
+          path.write_text(body + "\n\nSigned and notarized macOS app and DMG.\n")
+          with open(os.environ["GITHUB_ENV"], "a") as env:
+              env.write("RELEASE_NOTES_PATH=" + str(path) + "\n")
+          PYNOTES
+
       - name: Validate required secrets
         env:
           SIGNING_CERTIFICATE_BASE64: ${{ secrets.SIGNING_CERTIFICATE_BASE64 }}
@@ -251,7 +266,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "$RELEASE_NAME" \
-            --notes "Signed and notarized Harness $APP_VERSION ($APP_BUILD)." \
+            --notes-file "$RELEASE_NOTES_PATH" \
             --draft
 
       - name: Finalize release and generate appcast
@@ -354,7 +369,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "$RELEASE_NAME" \
-            --notes "Signed and notarized Harness $APP_VERSION ($APP_BUILD)." \
+            --notes-file "$RELEASE_NOTES_PATH" \
             --draft=false \
             --latest
 

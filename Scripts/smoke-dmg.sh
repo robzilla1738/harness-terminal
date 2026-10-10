@@ -55,7 +55,7 @@ build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")"
 minimum="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$plist")"
 echo "    Harness $version ($build), macOS $minimum+"
 
-for binary in Harness HarnessDaemon harness-cli; do
+for binary in Harness HarnessSessionHost HarnessDaemon harness-cli; do
   path="$app/Contents/MacOS/$binary"
   [[ -x "$path" ]] || { echo "Missing executable: $path" >&2; exit 1; }
   if ! lipo -archs "$path" | grep -qw arm64; then
