@@ -448,6 +448,7 @@
 		FD585F1F104667C4E813BF37 /* TerminalBannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B714D34CAAE16A1760E7438F /* TerminalBannerTests.swift */; };
 		FF14076D45F23530910D177B /* LaunchAgentInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF40CE61E1B2BA4AB5600378 /* LaunchAgentInstallerTests.swift */; };
 		FFCA3AA1B41CAF53A71C313F /* HarnessTerminalEngine in Frameworks */ = {isa = PBXBuildFile; productRef = 3FC55903EBB40EC6C3E9A20D /* HarnessTerminalEngine */; };
+		2AABBCCDD001122334455667 /* HarnessMCP in Frameworks */ = {isa = PBXBuildFile; productRef = 2AABBCCDD001122334455668 /* HarnessMCP */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -991,6 +992,7 @@
 				72F4C86A6128F1B06C68AECF /* HarnessTheme in Frameworks */,
 				5F4408D7C85949E16AEA0347 /* CHarnessSys in Frameworks */,
 				EF50E32EACBE441DF2EA27FD /* HarnessScript in Frameworks */,
+				2AABBCCDD001122334455667 /* HarnessMCP in Frameworks */,
 				4318796452D9C4FE677869EB /* CHarnessQR in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1975,6 +1977,7 @@
 				5D5E88A4806CBFDE408201CC /* HarnessTheme */,
 				CBA32B2341C14CF9825FD72E /* CHarnessSys */,
 				FFD4D4E69553767820818A44 /* HarnessScript */,
+				2AABBCCDD001122334455668 /* HarnessMCP */,
 				A987C881D702B140CCE7E103 /* CHarnessQR */,
 			);
 			productName = "harness-cli";
@@ -3651,6 +3654,10 @@
 		FFD4D4E69553767820818A44 /* HarnessScript */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = HarnessScript;
+		};
+		2AABBCCDD001122334455668 /* HarnessMCP */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = HarnessMCP;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

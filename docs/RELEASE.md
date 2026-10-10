@@ -10,24 +10,18 @@ It runs on the `macos-26` runner with Xcode 26.6, the same runner and pinned
 `XCODE_VERSION` as CI, so a release is built by the toolchain CI tested. Bump
 `XCODE_VERSION` in `release.yml` and `ci.yml` together.
 
-## Current release: Harness 2.1.0 (132)
+## Harness 2.2.0 (133)
 
-The October 9, 2026 release includes the companion-ready SSH bridge and secure public QR setup,
-LAN/Tailscale guidance, keyboard-size ownership fixes, shell compatibility, text-symbol and
-keyboard-event corrections, and desktop tab polish. The native iPhone/iPad companion is updated
-on [its main branch](https://github.com/robzilla1738/harness-ios); this release does not publish it
-to TestFlight or the App Store. See [mobile setup](MOBILE-BRIDGE.md) and the [changelog](../CHANGELOG.md).
+This release adds stable session-host ownership, durable agent workflows, encrypted macOS
+history, MCP and local extensibility, preview panes, packaging engineering, and native
+interface refinements. See the [changelog](../CHANGELOG.md),
+[implementation evidence](DEVELOPMENT-IMPLEMENTATION.md), and
+[native acceptance](NATIVE-ACCEPTANCE.md). The private iOS companion remains separately distributed.
 
 Version declarations and generated update notes move together. Run CI on the shipping commit,
-then the release workflow with `tag=v2.1.0` and `deploy_appcast=true`. Signing, notarization,
+then the release workflow with `tag=v2.2.0` and `deploy_appcast=true`. Signing, notarization,
 DMG smoke testing, and live appcast verification must pass before publication. The GitHub
 release and workflow retain the publication evidence and asset checksum.
-
-The [dated 2.0 readiness review](RELEASE-READINESS-2026-10-09.md) records the original terminal
-validation and restoration limits. Remaining desktop hardware acceptance stays in
-[#187](https://github.com/robzilla1738/harness-terminal/issues/187); measured performance gaps
-remain in [#27](https://github.com/robzilla1738/harness-terminal/issues/27) and [SCORECARD.md](SCORECARD.md).
-Mobile hardware evidence and distribution gates are tracked in the companion's `docs/RELEASE.md`.
 
 ## One-time GitHub setup
 
@@ -41,6 +35,7 @@ Required environment secrets:
 | --- | --- |
 | `SIGNING_CERTIFICATE_BASE64` | Base64-encoded `.p12` export for the Developer ID Application certificate. |
 | `SIGNING_CERTIFICATE_PASSWORD` | Password for the `.p12` export. |
+| `HISTORY_PROFILES_BASE64` | Base64-encoded gzip tar archive containing the four macOS shared-Keychain provisioning profiles at its root. |
 | `SIGNING_IDENTITY` | Exact codesign identity, for example `Developer ID Application: Name (TEAMID)`. |
 | `ASC_ISSUER_ID` | App Store Connect API issuer UUID. |
 | `ASC_KEY_ID` | App Store Connect API key ID. |

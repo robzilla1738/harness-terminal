@@ -10,15 +10,14 @@ One self-contained app. The terminal engine, daemon, and CLI are first-party Swi
 
 ## Source and downloads
 
-This README describes the current `main` source. The changes listed under
-[Unreleased](CHANGELOG.md#unreleased) are available to build from source; the
-existing download remains Harness 2.1.0. Updating `main` does not publish a release.
+This README describes the current `main` source. Versioned changes and downloads
+are listed in the [changelog](CHANGELOG.md) and [GitHub Releases](https://github.com/robzilla1738/harness-terminal/releases).
 
 ## Download
 
-**Harness 2.1** adds secure QR setup for the iPhone and iPad companion, LAN/Tailscale
-connection guidance, and terminal-input refinements. Saved layouts, broader search, native
-color emoji, and the full changes are documented in the [changelog](CHANGELOG.md).
+**Harness 2.2** adds durable session ownership, agent history and the Overview Board,
+encrypted macOS history, development workflows, and a unified Graphite interface.
+The full changes are documented in the [changelog](CHANGELOG.md).
 See the [release-readiness review](docs/RELEASE-READINESS-2026-10-09.md) and
 [performance results](docs/SCORECARD.md) for measured results and remaining acceptance work.
 

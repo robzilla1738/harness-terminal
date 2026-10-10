@@ -85,6 +85,7 @@ jobs:
           SIGNING_CERTIFICATE_BASE64: ${{ secrets.SIGNING_CERTIFICATE_BASE64 }}
           SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
           SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
+          HISTORY_PROFILES_BASE64: ${{ secrets.HISTORY_PROFILES_BASE64 }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
@@ -97,6 +98,7 @@ jobs:
             SIGNING_CERTIFICATE_BASE64 \
             SIGNING_CERTIFICATE_PASSWORD \
             SIGNING_IDENTITY \
+            HISTORY_PROFILES_BASE64 \
             ASC_ISSUER_ID \
             ASC_KEY_ID \
             ASC_PRIVATE_KEY \
@@ -173,6 +175,20 @@ jobs:
           security find-identity -v -p codesigning "$KEYCHAIN_PATH"
 
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+      - name: Install shared Keychain provisioning profiles
+        env:
+          HISTORY_PROFILES_BASE64: ${{ secrets.HISTORY_PROFILES_BASE64 }}
+        run: |
+          set -euo pipefail
+          PROFILE_DIRECTORY="$RUNNER_TEMP/harness-history-profiles"
+          mkdir -m 700 "$PROFILE_DIRECTORY"
+          printf '%s' "$HISTORY_PROFILES_BASE64" | base64 --decode | tar -xz -C "$PROFILE_DIRECTORY"
+          for component in Harness HarnessSessionHost HarnessDaemon harness-cli; do
+            test -s "$PROFILE_DIRECTORY/$component.provisionprofile"
+            chmod 600 "$PROFILE_DIRECTORY/$component.provisionprofile"
+          done
+          echo "HARNESS_PROVISIONING_PROFILE_DIRECTORY=$PROFILE_DIRECTORY" >> "$GITHUB_ENV"
 
       - name: Write notarization and Sparkle keys
         env:
@@ -355,6 +371,7 @@ jobs:
       - name: Delete temporary keychain
         if: ${{ always() }}
         run: |
+          rm -rf "$RUNNER_TEMP/harness-history-profiles"
           if [[ -n "${KEYCHAIN_PATH:-}" ]]; then
             security delete-keychain "$KEYCHAIN_PATH" || true
           fi

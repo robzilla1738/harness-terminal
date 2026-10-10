@@ -8,8 +8,9 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 
 ## [Unreleased]
 
-These changes are available on `main`; no new tagged release or downloadable build
-has been published for them.
+## [2.2.0] - 2026-10-10
+
+Harness 2.2 brings durable session ownership, agent workflows, and a unified native interface.
 
 ### Added
 
@@ -1542,3 +1543,5 @@ per-patch detail.
 [1.0.5]: https://github.com/robzilla1738/harness-terminal/releases/tag/v1.0.5
 
 [2.1.0]: https://github.com/robzilla1738/harness-terminal/releases/tag/v2.1.0
+
+[2.2.0]: https://github.com/robzilla1738/harness-terminal/releases/tag/v2.2.0
