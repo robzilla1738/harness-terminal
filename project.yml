@@ -109,7 +109,7 @@ targets:
       # warning about HarnessDaemonCore-Swift.h.
       SWIFT_INSTALL_OBJC_HEADER: NO
       DEFINES_MODULE: NO
-      OTHER_SWIFT_FLAGS: "$(inherited) -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessSys.modulemap -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessBase64.modulemap"
+      OTHER_SWIFT_FLAGS: "$(inherited) -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessSys.modulemap -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessBase64.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/Packages/CSQLite/module.modulemap"
   HarnessDaemon:
     type: tool
     platform: macOS
@@ -188,7 +188,7 @@ targets:
       CODE_SIGN_ENTITLEMENTS: Harness.entitlements
       SWIFT_VERSION: "6.0"
       MACOSX_DEPLOYMENT_TARGET: "15.0"
-      OTHER_SWIFT_FLAGS: "$(inherited) -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessSys.modulemap -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessBase64.modulemap"
+      OTHER_SWIFT_FLAGS: "$(inherited) -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessSys.modulemap -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessBase64.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/Packages/CSQLite/module.modulemap"
   HarnessCoreTests:
     type: bundle.unit-test
     platform: macOS
